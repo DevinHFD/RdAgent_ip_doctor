@@ -10,9 +10,14 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
 
     # Filesystem paths
     model_checkpoint_dir: Path = Path("./mbs_models")
-    data_dir: Path = Path("./mbs_data")
+    # Single parquet file containing all loans: must have cusip_col, date_col, and all feature columns
+    data_file: Path = Path("./mbs_data/data.parquet")
     output_dir: Path = Path("./mbs_output")
     scaler_path: Path = Path("./mbs_models/scaler.sav")  # joblib-saved sklearn scaler (StandardScaler)
+
+    # Column names in the parquet file
+    cusip_col: str = "cusip"      # column holding the CUSIP identifier
+    date_col: str = "fh_effdt"   # column holding the effective date (date or string)
 
     # Integrated Gradients defaults
     ig_baseline_strategy: str = "zero"  # "zero" | "mean" (mean = prev month/base scenario as baseline)

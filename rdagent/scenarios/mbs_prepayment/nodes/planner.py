@@ -33,7 +33,7 @@ def planner_node(state: MBSAnalysisState) -> dict:
         ig_n_steps=MBS_SETTINGS.ig_n_steps,
         ig_target_output=MBS_SETTINGS.ig_target_output,
         model_checkpoint_dir=str(MBS_SETTINGS.model_checkpoint_dir),
-        data_dir=str(MBS_SETTINGS.data_dir),
+        data_file=str(MBS_SETTINGS.data_file),
     )
     user_prompt = T(".prompts:planner.user").r(
         question=state["question"],
@@ -42,7 +42,7 @@ def planner_node(state: MBSAnalysisState) -> dict:
         human_feedback=human_fb,
         iteration=iteration,
         model_checkpoint_dir=str(MBS_SETTINGS.model_checkpoint_dir),
-        data_dir=str(MBS_SETTINGS.data_dir),
+        data_file=str(MBS_SETTINGS.data_file),
     )
 
     plan: AnalysisPlan = build_cls_from_json_with_retry(

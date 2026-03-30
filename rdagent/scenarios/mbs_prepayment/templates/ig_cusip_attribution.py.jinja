@@ -19,18 +19,22 @@ from captum.attr import IntegratedGradients
 # ---------------------------------------------------------------------------
 # Configuration (injected by template renderer)
 # ---------------------------------------------------------------------------
-CUSIP_LIST       = {{ plan.data_spec.cusip_list | tojson }}
-COMPARISON_MONTHS = {{ plan.comparison_months | tojson }}   # ordered list e.g. ["2024-01","2024-02","2024-03"]
-MODEL_CHECKPOINT = "{{ plan.model_spec.checkpoint_path }}"
-FEATURE_NAMES    = {{ plan.model_spec.feature_names | tojson }}
-SCALER_PATH      = "{{ mbs_settings.scaler_path }}"
+CUSIP_LIST        = {{ plan.data_spec.cusip_list | tojson }}
+COMPARISON_MONTHS = {{ plan.comparison_months | tojson }}   # ordered list e.g. ["2024-01","2024-02"]
+MODEL_CHECKPOINT  = "{{ plan.model_spec.checkpoint_path }}"
+FEATURE_NAMES     = {{ plan.model_spec.feature_names | tojson }}
+SCALER_PATH       = "{{ mbs_settings.scaler_path }}"
 BASELINE_STRATEGY = "{{ plan.ig_params.baseline_strategy }}"  # "zero" | "mean"
-N_STEPS          = {{ plan.ig_params.n_steps }}
-TARGET_OUTPUT    = "{{ plan.ig_params.target_output }}"
-OUTPUT_INDEX     = 0 if TARGET_OUTPUT == "cpr" else 1
-BATCH_SIZE       = {{ plan.ig_params.batch_size }}
-DATA_DIR         = pathlib.Path("{{ mbs_settings.data_dir }}")
-OUTPUT_DIR       = pathlib.Path("{{ output_dir }}")
+N_STEPS           = {{ plan.ig_params.n_steps }}
+TARGET_OUTPUT     = "{{ plan.ig_params.target_output }}"
+OUTPUT_INDEX      = 0 if TARGET_OUTPUT == "cpr" else 1
+BATCH_SIZE        = {{ plan.ig_params.batch_size }}
+
+# Single parquet file containing all data
+DATA_FILE         = pathlib.Path("{{ mbs_settings.data_file }}")
+CUSIP_COL         = "{{ mbs_settings.cusip_col }}"   # e.g. "cusip"
+DATE_COL          = "{{ mbs_settings.date_col }}"    # e.g. "fh_effdt"
+OUTPUT_DIR        = pathlib.Path("{{ output_dir }}")
 
 # ---------------------------------------------------------------------------
 # Load model and scaler
@@ -47,22 +51,39 @@ feature_scales = np.array(scaler.scale_, dtype=np.float64)
 ig = IntegratedGradients(model)
 
 # ---------------------------------------------------------------------------
-# Data loading helper
+# Load dataset once and index for fast filtering
 # ---------------------------------------------------------------------------
-def load_cusip_features(cusip: str, month: str) -> torch.Tensor:
+print(f"Loading data from {DATA_FILE} ...", flush=True)
+df_all = pd.read_parquet(DATA_FILE)
+
+# Normalise the date column to "YYYY-MM" period strings for easy month matching
+df_all["_month"] = pd.to_datetime(df_all[DATE_COL], errors="coerce").dt.to_period("M").astype(str)
+
+# Validate required columns
+missing_feats = [f for f in FEATURE_NAMES if f not in df_all.columns]
+if missing_feats:
+    raise ValueError(f"Feature columns missing from data file: {missing_feats}")
+if CUSIP_COL not in df_all.columns:
+    raise ValueError(f"CUSIP column '{CUSIP_COL}' not found in data file.")
+
+# ---------------------------------------------------------------------------
+# Data loading helper — filters from the single parquet
+# ---------------------------------------------------------------------------
+def load_cusip_month(cusip: str, month: str) -> torch.Tensor:
     """
-    Load the normalized feature matrix for a CUSIP at a given month.
-    Tries parquet first, then CSV. Returns tensor of shape [n_samples, n_features].
-    Data on disk is already normalized (mean=0, std=1) — exactly as fed to the model.
+    Return a float32 tensor [n_rows, n_features] of normalized features for
+    (cusip, month). Raises ValueError if no rows match.
+    Data on disk is already normalized (mean=0, std=1) as fed to the model.
     """
-    for ext in (".parquet", ".csv"):
-        path = DATA_DIR / f"{cusip}_{month}{ext}"
-        if path.exists():
-            df = pd.read_parquet(path) if ext == ".parquet" else pd.read_csv(path)
-            return torch.tensor(df[FEATURE_NAMES].values, dtype=torch.float32)
-    raise FileNotFoundError(
-        f"No data file found for CUSIP={cusip}, month={month} in {DATA_DIR}"
-    )
+    mask = (df_all[CUSIP_COL] == cusip) & (df_all["_month"] == month)
+    rows = df_all.loc[mask, FEATURE_NAMES]
+    if rows.empty:
+        raise ValueError(
+            f"No data for CUSIP={cusip}, month={month} in {DATA_FILE}. "
+            f"Available months for this CUSIP: "
+            f"{sorted(df_all.loc[df_all[CUSIP_COL]==cusip, '_month'].unique().tolist())}"
+        )
+    return torch.tensor(rows.values.astype(np.float32), dtype=torch.float32)
 
 # ---------------------------------------------------------------------------
 # Attribution computation
@@ -85,9 +106,9 @@ for cusip in CUSIP_LIST:
         period_key = f"{month_t0}->{month_t1}"
 
         try:
-            x_t0 = load_cusip_features(cusip, month_t0)  # [n_samples, n_features] normalized
-            x_t1 = load_cusip_features(cusip, month_t1)  # [n_samples, n_features] normalized
-        except FileNotFoundError as e:
+            x_t0 = load_cusip_month(cusip, month_t0)  # [n_rows, n_features] normalized
+            x_t1 = load_cusip_month(cusip, month_t1)  # [n_rows, n_features] normalized
+        except ValueError as e:
             attributions_normalized[cusip][period_key] = {"error": str(e)}
             attributions_original[cusip][period_key]   = {"error": str(e)}
             feature_values_original[cusip][period_key] = {"error": str(e)}
@@ -98,8 +119,10 @@ for cusip in CUSIP_LIST:
             baseline = torch.zeros_like(x_t1)
         else:
             # "mean" strategy: use previous month as baseline
-            # IG then measures change attributable to each feature's movement t0 → t1
-            baseline = x_t0
+            # Align row counts (use min length)
+            n = min(x_t0.shape[0], x_t1.shape[0])
+            baseline = x_t0[:n]
+            x_t1 = x_t1[:n]
 
         # Run Integrated Gradients in batches to avoid OOM
         all_attr_norm = []
@@ -120,11 +143,11 @@ for cusip in CUSIP_LIST:
 
         # Rescale to original feature units using chain rule:
         #   x_norm = (x - mean) / scale  =>  dx_norm/dx = 1/scale
-        #   attr_original = attr_normalized / scale
+        #   IG gives d_output/d_x_norm, so d_output/d_x_orig = attr_norm / scale
         attr_orig_np = attr_norm_np / feature_scales
 
         # Inverse-transform t1 feature values to original scale for report context
-        x_t1_orig = scaler.inverse_transform(x_t1.numpy())  # [n_samples, n_features]
+        x_t1_orig = scaler.inverse_transform(x_t1.numpy())  # [n_rows, n_features]
         x_t1_orig_mean = x_t1_orig.mean(axis=0)             # [n_features]
 
         attributions_normalized[cusip][period_key] = dict(zip(FEATURE_NAMES, attr_norm_np.tolist()))
@@ -165,6 +188,7 @@ result = {
         "cusip_count":      len(CUSIP_LIST),
         "period_count":     len(months) - 1,
         "feature_count":    len(FEATURE_NAMES),
+        "data_file":        str(DATA_FILE),
     },
     "summary_stats": summary_stats,
 }
