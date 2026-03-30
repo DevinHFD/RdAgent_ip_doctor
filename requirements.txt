@@ -1,5 +1,8 @@
 # Requirements for runtime.
 pydantic-settings
+langgraph>=0.2
+captum
+joblib
 
 python-Levenshtein
 scikit-learn
