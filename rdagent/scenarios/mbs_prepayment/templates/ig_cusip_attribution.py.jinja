@@ -32,8 +32,9 @@ BATCH_SIZE        = {{ plan.ig_params.batch_size }}
 
 # Single parquet file containing all data
 DATA_FILE         = pathlib.Path("{{ mbs_settings.data_file }}")
-CUSIP_COL         = "{{ mbs_settings.cusip_col }}"   # e.g. "cusip"
-DATE_COL          = "{{ mbs_settings.date_col }}"    # e.g. "fh_effdt"
+CUSIP_COL         = "{{ mbs_settings.cusip_col }}"    # e.g. "cusip"
+DATE_COL          = "{{ mbs_settings.date_col }}"     # e.g. "fh_effdt"
+DATE_FORMAT       = "{{ mbs_settings.date_format }}"  # e.g. "%Y%m%d" for integer 20240301
 OUTPUT_DIR        = pathlib.Path("{{ output_dir }}")
 
 # ---------------------------------------------------------------------------
@@ -56,8 +57,13 @@ ig = IntegratedGradients(model)
 print(f"Loading data from {DATA_FILE} ...", flush=True)
 df_all = pd.read_parquet(DATA_FILE)
 
-# Normalise the date column to "YYYY-MM" period strings for easy month matching
-df_all["_month"] = pd.to_datetime(df_all[DATE_COL], errors="coerce").dt.to_period("M").astype(str)
+# Normalise the date column to "YYYY-MM" period strings for easy month matching.
+# astype(str) handles integer dates like 20240301 before parsing with the configured format.
+df_all["_month"] = (
+    pd.to_datetime(df_all[DATE_COL].astype(str), format=DATE_FORMAT, errors="coerce")
+    .dt.to_period("M")
+    .astype(str)
+)
 
 # Validate required columns
 missing_feats = [f for f in FEATURE_NAMES if f not in df_all.columns]

@@ -5,12 +5,41 @@ On reject loops, incorporates human feedback into the prompt so the revised
 plan directly addresses the reviewer's concerns.
 """
 
+from pathlib import Path
+
+import pandas as pd
+
 from rdagent.log import rdagent_logger as logger
 from rdagent.utils.agent.tpl import T
 from rdagent.utils.agent.workflow import build_cls_from_json_with_retry
 
 from ..conf import MBS_SETTINGS
 from ..state import AnalysisPlan, HumanFeedback, MBSAnalysisState
+
+
+def _discover_checkpoints() -> list[str]:
+    """Return all .pth/.pt filenames found in model_checkpoint_dir."""
+    ckpt_dir = MBS_SETTINGS.model_checkpoint_dir
+    if not ckpt_dir.exists():
+        return []
+    return sorted(
+        str(p) for p in ckpt_dir.iterdir() if p.suffix in (".pth", ".pt")
+    )
+
+
+def _read_feature_names() -> list[str]:
+    """
+    Read the parquet header and return feature columns — everything except
+    cusip_col and date_col.  Returns an empty list if the file is missing.
+    """
+    data_file = MBS_SETTINGS.data_file
+    if not data_file.exists():
+        logger.warning(f"data_file not found for feature discovery: {data_file}")
+        return []
+    # Read only the schema (zero rows) to avoid loading the full dataset
+    df = pd.read_parquet(data_file).iloc[:0]
+    exclude = {MBS_SETTINGS.cusip_col, MBS_SETTINGS.date_col}
+    return [c for c in df.columns if c not in exclude]
 
 
 def planner_node(state: MBSAnalysisState) -> dict:
@@ -27,6 +56,12 @@ def planner_node(state: MBSAnalysisState) -> dict:
     else:
         logger.info(f"Generating analysis plan (iteration {iteration}).")
 
+    # Discover ground-truth values from disk so the LLM doesn't have to guess
+    available_checkpoints = _discover_checkpoints()
+    feature_names = _read_feature_names()
+    logger.info(f"Discovered checkpoints: {available_checkpoints}")
+    logger.info(f"Discovered {len(feature_names)} feature columns from parquet.")
+
     sys_prompt = T(".prompts:planner.system").r(
         question_type=state["question_type"],
         ig_baseline_strategy=MBS_SETTINGS.ig_baseline_strategy,
@@ -34,6 +69,8 @@ def planner_node(state: MBSAnalysisState) -> dict:
         ig_target_output=MBS_SETTINGS.ig_target_output,
         model_checkpoint_dir=str(MBS_SETTINGS.model_checkpoint_dir),
         data_file=str(MBS_SETTINGS.data_file),
+        available_checkpoints=available_checkpoints,
+        feature_names=feature_names,
     )
     user_prompt = T(".prompts:planner.user").r(
         question=state["question"],
@@ -43,6 +80,8 @@ def planner_node(state: MBSAnalysisState) -> dict:
         iteration=iteration,
         model_checkpoint_dir=str(MBS_SETTINGS.model_checkpoint_dir),
         data_file=str(MBS_SETTINGS.data_file),
+        available_checkpoints=available_checkpoints,
+        feature_names=feature_names,
     )
 
     plan: AnalysisPlan = build_cls_from_json_with_retry(

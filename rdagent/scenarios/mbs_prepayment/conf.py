@@ -16,8 +16,9 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     scaler_path: Path = Path("./mbs_models/scaler.sav")  # joblib-saved sklearn scaler (StandardScaler)
 
     # Column names in the parquet file
-    cusip_col: str = "cusip"      # column holding the CUSIP identifier
-    date_col: str = "fh_effdt"   # column holding the effective date (date or string)
+    cusip_col: str = "cusip"       # column holding the CUSIP identifier
+    date_col: str = "fh_effdt"    # column holding the effective date
+    date_format: str = "%Y%m%d"   # strptime format for date_col; e.g. "%Y%m%d" for int 20240301
 
     # Integrated Gradients defaults
     ig_baseline_strategy: str = "zero"  # "zero" | "mean" (mean = prev month/base scenario as baseline)

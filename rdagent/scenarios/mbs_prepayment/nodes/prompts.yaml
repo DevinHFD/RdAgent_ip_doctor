@@ -77,18 +77,25 @@ planner:
       Populate data_spec.scenario_params as a dict mapping each scenario name to its date window:
         {"base": ["YYYY-MM", "YYYY-MM"], "shock_name": ["YYYY-MM", "YYYY-MM"], ...}
       The "base" key is required. The date windows define which rows are selected from the data file.
-    - checkpoint_path should be a path relative to model_checkpoint_dir: {{ model_checkpoint_dir }}
+    - checkpoint_path: use EXACTLY one of the available checkpoint paths listed below. Do not invent filenames.
+    - feature_names: use EXACTLY the feature columns listed below, in the order given. Do not add, remove, or rename any.
     - All data is in a single parquet file at: {{ data_file }}
-      The file has a CUSIP column and a date column (fh_effdt). Filter by CUSIP from the question.
-    - feature_names must match the model's expected input feature order exactly.
     - Do not include markdown code fences. Return only the JSON object.
 
   user: |-
     Question: {{ question }}
     Extracted CUSIPs: {{ cusip_list }}
     Scenario parameters from question: {{ scenario_params }}
-    Model checkpoint directory: {{ model_checkpoint_dir }}
-    Data file (single parquet): {{ data_file }}
+
+    Available model checkpoints (use exactly one of these paths):
+    {% for ckpt in available_checkpoints %}
+    - {{ ckpt }}
+    {% endfor %}
+
+    Feature columns from data file (use ALL of these, in this exact order):
+    {{ feature_names | tojson }}
+
+    Data file: {{ data_file }}
     {% if human_feedback %}
     ⚠️  Previous plan was REJECTED by the human reviewer (iteration {{ iteration }}).
     Reviewer feedback:
