@@ -21,7 +21,7 @@ _FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     (r"\bos\.system\b", "os.system"),
     (r"\bos\.popen\b", "os.popen"),
     (r"\bsubprocess\b", "subprocess"),
-    (r"\beval\s*\(", "eval()"),
+    (r"(?<!\.)(\beval\s*\()", "eval()"),  # bare eval() only; .eval() method calls are allowed
     (r"\bexec\s*\(", "exec()"),
     (r"\b__import__\s*\(", "__import__()"),
     (r"\bsocket\b", "socket"),
