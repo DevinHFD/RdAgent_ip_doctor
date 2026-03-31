@@ -44,10 +44,8 @@ model = torch.load(MODEL_CHECKPOINT, map_location="cpu", weights_only=False)
 model.eval()
 
 scaler = joblib.load(SCALER_PATH)
-# scaler.mean_  : shape [n_features] — per-feature means from training data
-# scaler.scale_ : shape [n_features] — per-feature stds  from training data
-feature_means  = np.array(scaler.mean_,  dtype=np.float64)
-feature_scales = np.array(scaler.scale_, dtype=np.float64)
+# scaler.mean_  : shape [n_features]
+# scaler.scale_ : shape [n_features]
 
 ig = IntegratedGradients(model)
 
@@ -93,9 +91,10 @@ def load_cusip_month(cusip: str, month: str) -> torch.Tensor:
 
 # ---------------------------------------------------------------------------
 # Attribution computation
+# attributions_normalized : CUSIP -> period_key -> {feature: IG value (SMM/CPR contribution)}
+# feature_values_original : CUSIP -> period_key -> {feature: value in original scale, for context}
 # ---------------------------------------------------------------------------
 attributions_normalized = {}
-attributions_original   = {}
 feature_values_original = {}
 
 months = COMPARISON_MONTHS or []
@@ -104,7 +103,6 @@ if len(months) < 2:
 
 for cusip in CUSIP_LIST:
     attributions_normalized[cusip] = {}
-    attributions_original[cusip]   = {}
     feature_values_original[cusip] = {}
 
     for i in range(len(months) - 1):
@@ -116,7 +114,6 @@ for cusip in CUSIP_LIST:
             x_t1 = load_cusip_month(cusip, month_t1)  # [n_rows, n_features] normalized
         except ValueError as e:
             attributions_normalized[cusip][period_key] = {"error": str(e)}
-            attributions_original[cusip][period_key]   = {"error": str(e)}
             feature_values_original[cusip][period_key] = {"error": str(e)}
             continue
 
@@ -124,14 +121,13 @@ for cusip in CUSIP_LIST:
         if BASELINE_STRATEGY == "zero":
             baseline = torch.zeros_like(x_t1)
         else:
-            # "mean" strategy: use previous month as baseline
-            # Align row counts (use min length)
+            # "mean" strategy: use previous month as baseline so IG measures t0->t1 shift
             n = min(x_t0.shape[0], x_t1.shape[0])
             baseline = x_t0[:n]
             x_t1 = x_t1[:n]
 
         # Run Integrated Gradients in batches to avoid OOM
-        all_attr_norm = []
+        all_attr = []
         for start in range(0, x_t1.shape[0], BATCH_SIZE):
             batch      = x_t1[start : start + BATCH_SIZE]
             batch_base = baseline[start : start + BATCH_SIZE]
@@ -142,40 +138,36 @@ for cusip in CUSIP_LIST:
                 n_steps=N_STEPS,
                 return_convergence_delta=True,
             )
-            all_attr_norm.append(attr.detach().numpy())
+            all_attr.append(attr.detach().numpy())
 
         # Mean attribution across all samples: shape [n_features]
-        attr_norm_np = np.concatenate(all_attr_norm, axis=0).mean(axis=0)
+        # These values are in SMM/CPR contribution units — no rescaling applied.
+        attr_np = np.concatenate(all_attr, axis=0).mean(axis=0)
 
-        # Rescale to original feature units using chain rule:
-        #   x_norm = (x - mean) / scale  =>  dx_norm/dx = 1/scale
-        #   IG gives d_output/d_x_norm, so d_output/d_x_orig = attr_norm / scale
-        attr_orig_np = attr_norm_np / feature_scales
-
-        # Inverse-transform t1 feature values to original scale for report context
+        # Inverse-transform t1 feature values to original scale for human context
+        # e.g. WALA: normalized -0.3 → original 118.5 months
         x_t1_orig = scaler.inverse_transform(x_t1.numpy())  # [n_rows, n_features]
         x_t1_orig_mean = x_t1_orig.mean(axis=0)             # [n_features]
 
-        attributions_normalized[cusip][period_key] = dict(zip(FEATURE_NAMES, attr_norm_np.tolist()))
-        attributions_original[cusip][period_key]   = dict(zip(FEATURE_NAMES, attr_orig_np.tolist()))
+        attributions_normalized[cusip][period_key] = dict(zip(FEATURE_NAMES, attr_np.tolist()))
         feature_values_original[cusip][period_key] = dict(zip(FEATURE_NAMES, x_t1_orig_mean.tolist()))
 
 # ---------------------------------------------------------------------------
-# Summary statistics (across all CUSIPs and periods, in original scale)
+# Summary statistics across all CUSIPs and periods
 # ---------------------------------------------------------------------------
-all_attr_orig_by_feature: dict[str, list[float]] = {f: [] for f in FEATURE_NAMES}
-for cusip_data in attributions_original.values():
+all_attr_by_feature: dict[str, list[float]] = {f: [] for f in FEATURE_NAMES}
+for cusip_data in attributions_normalized.values():
     for period_data in cusip_data.values():
         if "error" not in period_data:
             for feat, val in period_data.items():
-                all_attr_orig_by_feature[feat].append(val)
+                all_attr_by_feature[feat].append(val)
 
 summary_stats = {
     feat: {
-        "mean_attr_original": float(np.mean(vals)) if vals else 0.0,
-        "std_attr_original":  float(np.std(vals))  if vals else 0.0,
+        "mean_attr": float(np.mean(vals)) if vals else 0.0,
+        "std_attr":  float(np.std(vals))  if vals else 0.0,
     }
-    for feat, vals in all_attr_orig_by_feature.items()
+    for feat, vals in all_attr_by_feature.items()
 }
 
 # ---------------------------------------------------------------------------
@@ -185,16 +177,15 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 result = {
     "analysis_type": "cusip_attribution",
     "attributions_normalized": attributions_normalized,
-    "attributions_original":   attributions_original,
     "feature_values_original": feature_values_original,
     "metadata": {
-        "n_steps":          N_STEPS,
-        "baseline":         BASELINE_STRATEGY,
-        "target_output":    TARGET_OUTPUT,
-        "cusip_count":      len(CUSIP_LIST),
-        "period_count":     len(months) - 1,
-        "feature_count":    len(FEATURE_NAMES),
-        "data_file":        str(DATA_FILE),
+        "n_steps":       N_STEPS,
+        "baseline":      BASELINE_STRATEGY,
+        "target_output": TARGET_OUTPUT,
+        "cusip_count":   len(CUSIP_LIST),
+        "period_count":  len(months) - 1,
+        "feature_count": len(FEATURE_NAMES),
+        "data_file":     str(DATA_FILE),
     },
     "summary_stats": summary_stats,
 }

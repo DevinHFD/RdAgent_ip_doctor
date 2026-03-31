@@ -51,21 +51,21 @@ class ExecutionResult(BaseModel):
     """
     Standardized output written as output.json by every generated analysis script.
 
-    Two attribution tracks are stored:
-    - attributions_normalized: raw IG output in normalized input space (for debugging/convergence)
-    - attributions_original:   IG rescaled to original feature units via chain rule (attr_norm / scaler.scale_)
-    - feature_values_original: actual feature values inverse-transformed for report context
+    - attributions_normalized: IG output as-is (represents SMM/CPR contribution per feature).
+        Structure: CUSIP -> period_key -> {feature_name -> float}
+        period_key examples:
+          cusip_attribution  : "2024-01->2024-02"
+          scenario_comparison: "rate_shock" (scenario name)
+    - feature_values_original: feature values inverse-transformed to original scale for context
+        (e.g. WALA: 120.3 months). Same nested structure as attributions_normalized.
+        Used in plots and reports so readers understand what feature level caused the attribution.
     """
 
     analysis_type: Literal["cusip_attribution", "scenario_comparison"]
-    # CUSIP -> period_key -> {feature_name -> value}
-    # For cusip_attribution period_key is e.g. "2024-01->2024-02"
-    # For scenario_comparison period_key is e.g. "base->shock_100bps"
     attributions_normalized: dict
-    attributions_original: dict
-    feature_values_original: dict  # CUSIP -> period_key -> {feature_name -> original-scale value}
+    feature_values_original: dict
     metadata: dict
-    summary_stats: dict  # feature_name -> {"mean_attr_original": float, "std_attr_original": float}
+    summary_stats: dict  # feature_name -> {"mean_attr": float, "std_attr": float}
 
 
 # ---------------------------------------------------------------------------

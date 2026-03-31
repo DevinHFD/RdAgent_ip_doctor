@@ -57,7 +57,7 @@ model.eval()
 
 print(f"[ig_scenario_comparison] Loading scaler from {SCALER_PATH}", flush=True)
 scaler = joblib.load(SCALER_PATH)
-feature_scales = np.array(scaler.scale_, dtype=np.float64)  # shape: [n_features]
+# scaler used only for inverse_transform to show original-scale feature values in reports
 
 # ---------------------------------------------------------------------------
 # Load dataset once and index for fast filtering
@@ -170,9 +170,8 @@ if "base" not in SCENARIO_PARAMS:
         "e.g. {'base': ['2023-01', '2023-06'], 'shock': ['2023-07', '2023-12']}."
     )
 
-attributions_normalized: dict = {}
-attributions_original: dict   = {}
-feature_values_original: dict = {}
+attributions_normalized: dict = {}   # CUSIP -> scenario -> {feature: IG value (SMM/CPR contribution)}
+feature_values_original: dict = {}   # CUSIP -> scenario -> {feature: original-scale value for context}
 
 for cusip in CUSIP_LIST:
     print(f"\n[ig_scenario_comparison] Processing CUSIP={cusip}", flush=True)
@@ -185,7 +184,6 @@ for cusip in CUSIP_LIST:
         continue
 
     cusip_attr_norm = {}
-    cusip_attr_orig = {}
     cusip_feat_orig = {}
 
     for scenario in scenarios_to_run:
@@ -214,25 +212,19 @@ for cusip in CUSIP_LIST:
             # "mean" — use base scenario rows as IG baseline
             baseline_slice = base_slice
 
-        # Run IG in normalized space
-        attr_norm_mean = run_ig_batched(scenario_slice, baseline_slice)  # [n_features]
+        # Run IG: attributions are in SMM/CPR contribution units — no rescaling applied.
+        attr_mean = run_ig_batched(scenario_slice, baseline_slice)  # [n_features]
 
-        # Rescale attributions to original scale via chain rule:
-        #   x_norm = (x_orig - mean) / scale
-        #   d_output/d_x_orig = (d_output/d_x_norm) * (1/scale)
-        attr_orig_mean = attr_norm_mean / feature_scales
-
-        # Original-scale feature values for context
+        # Inverse-transform scenario feature values to original scale for human context
+        # e.g. WALA: normalized -0.3 → original 118.5 months
         x_orig = scaler.inverse_transform(scenario_slice)  # [n_rows, n_features]
         feat_orig_mean = x_orig.mean(axis=0)               # [n_features]
 
-        cusip_attr_norm[scenario] = {feat: float(v) for feat, v in zip(FEATURE_NAMES, attr_norm_mean)}
-        cusip_attr_orig[scenario] = {feat: float(v) for feat, v in zip(FEATURE_NAMES, attr_orig_mean)}
+        cusip_attr_norm[scenario] = {feat: float(v) for feat, v in zip(FEATURE_NAMES, attr_mean)}
         cusip_feat_orig[scenario] = {feat: float(v) for feat, v in zip(FEATURE_NAMES, feat_orig_mean)}
 
-    if cusip_attr_orig:
+    if cusip_attr_norm:
         attributions_normalized[cusip] = cusip_attr_norm
-        attributions_original[cusip]   = cusip_attr_orig
         feature_values_original[cusip] = cusip_feat_orig
 
 # ---------------------------------------------------------------------------
@@ -241,7 +233,7 @@ for cusip in CUSIP_LIST:
 
 summary_stats: dict = {}
 feat_values_agg: dict[str, list] = {f: [] for f in FEATURE_NAMES}
-for cusip_data in attributions_original.values():
+for cusip_data in attributions_normalized.values():
     for scenario_data in cusip_data.values():
         for feat, val in scenario_data.items():
             if feat in feat_values_agg:
@@ -251,8 +243,8 @@ for feat, vals in feat_values_agg.items():
     if vals:
         arr = np.array(vals)
         summary_stats[feat] = {
-            "mean_attr_original": float(arr.mean()),
-            "std_attr_original":  float(arr.std()),
+            "mean_attr": float(arr.mean()),
+            "std_attr":  float(arr.std()),
         }
 
 # ---------------------------------------------------------------------------
@@ -265,7 +257,6 @@ output_path.parent.mkdir(parents=True, exist_ok=True)
 output = {
     "analysis_type": "scenario_comparison",
     "attributions_normalized": attributions_normalized,
-    "attributions_original":   attributions_original,
     "feature_values_original": feature_values_original,
     "metadata": {
         "cusip_list":          CUSIP_LIST,
@@ -275,7 +266,7 @@ output = {
         "n_steps":             N_STEPS,
         "target_output":       TARGET_OUTPUT,
         "feature_names":       FEATURE_NAMES,
-        "n_cusips_processed":  len(attributions_original),
+        "n_cusips_processed":  len(attributions_normalized),
         "data_file":           DATA_FILE,
     },
     "summary_stats": summary_stats,

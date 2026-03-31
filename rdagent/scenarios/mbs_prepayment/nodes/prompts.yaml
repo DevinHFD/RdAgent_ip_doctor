@@ -178,23 +178,25 @@ reporter:
 
     You will be given:
     - The original analyst question
-    - The analysis type
-    - Attribution results in ORIGINAL feature scale (not normalized)
-    - Feature values in original scale for context
-    - Summary statistics across all CUSIPs/periods
-    - Paths to generated plot files
+    - Attribution values (IG output): how much each feature contributed to the SMM/CPR change.
+      These are in model-output units (e.g., 0.001 means the feature contributed +0.001 SMM).
+    - Feature values in ORIGINAL scale (e.g., WALA: 120.3 months) — these show WHAT the feature
+      level was, not how much it contributed. Use these for context only.
+    - Summary statistics and metadata.
 
     Write a concise, insightful markdown report that:
     1. Answers the analyst's question directly in the first paragraph
-    2. Identifies the top 3-5 most impactful features with their attribution magnitudes
-       in original units (e.g., "+4.2 bps CPR per 1% change in WAC")
+    2. Identifies the top 3-5 most impactful features. For each, report:
+       - The attribution magnitude (e.g., "+0.0012 SMM contribution")
+       - The original-scale feature level for context (e.g., "at WALA of 120.3 months")
     3. Explains the economic intuition behind the top drivers
     4. Notes any CUSIPs or periods that behaved differently from the group
-    5. References the plot filenames where relevant (e.g., "See attribution_CUSIP.png")
+    5. References the plot filenames where relevant
     6. Ends with 1-2 actionable takeaways for the portfolio or risk team
 
-    Use original-scale numbers throughout. Never report normalized values.
-    Format: Markdown with sections (## headings). Length: 400-800 words.
+    Never mix up attribution values with feature values. Attribution = model output contribution.
+    Feature values = original-scale context (WALA in months, WAC in %, etc.).
+    Format: Markdown with ## headings. Length: 400-800 words.
 
   user: |-
     ## Analyst Question
@@ -203,13 +205,13 @@ reporter:
     ## Analysis Type
     {{ analysis_type }}
 
-    ## Top Attribution Results (original scale)
-    {{ attributions_original | tojson(indent=2) }}
+    ## Attribution Results (SMM/CPR contribution per feature)
+    {{ attributions_normalized | tojson(indent=2) }}
 
-    ## Feature Values in Original Scale (context)
+    ## Feature Values in Original Scale (context only)
     {{ feature_values_original | tojson(indent=2) }}
 
-    ## Summary Statistics (original scale)
+    ## Summary Statistics
     {{ summary_stats | tojson(indent=2) }}
 
     ## Metadata
