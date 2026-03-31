@@ -154,7 +154,4 @@ def build_graph() -> "CompiledStateGraph":  # noqa: F821
 
     # Compile with persistent checkpointer and human interrupt
     checkpointer = MemorySaver()
-    return builder.compile(
-        checkpointer=checkpointer,
-        interrupt_before=["human_reviewer"],
-    )
+    return builder.compile(checkpointer=checkpointer)
