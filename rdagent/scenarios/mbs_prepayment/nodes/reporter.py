@@ -553,14 +553,19 @@ def reporter_node(state: MBSAnalysisState) -> dict:
     feature_change_table = _build_feature_change_table(exec_result)
     prediction_summary = _build_prediction_summary(exec_result)
     sys_prompt = T(".prompts:reporter.system").r()
+    # Build a compact metadata dict — strip large lists (feature_names) that add no narrative value
+    compact_metadata = {
+        k: v for k, v in exec_result.metadata.items()
+        if not isinstance(v, list) or len(v) <= 5
+    }
+
     user_prompt = T(".prompts:reporter.user").r(
         question=state["question"],
         analysis_type=analysis_type,
-        attributions_normalized=exec_result.attributions_normalized,
         feature_change_table=feature_change_table,
         prediction_summary=prediction_summary,
         summary_stats=exec_result.summary_stats,
-        metadata=exec_result.metadata,
+        metadata=compact_metadata,
         plot_paths=plot_paths,
     )
 

@@ -233,10 +233,7 @@ reporter:
     ## Model Predictions (SMM/CPR forecast for each period)
     {{ prediction_summary }}
 
-    ## Attribution Results (SMM/CPR contribution per feature)
-    {{ attributions_normalized | tojson(indent=2) }}
-
-    ## Summary Statistics (attribution magnitude per feature)
+    ## Attribution Summary Statistics (mean ± std contribution per feature)
     {{ summary_stats | tojson(indent=2) }}
 
     ## Metadata
