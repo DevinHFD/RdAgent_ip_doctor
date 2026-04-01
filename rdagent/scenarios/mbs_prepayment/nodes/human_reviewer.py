@@ -174,7 +174,9 @@ def human_reviewer_node(state: MBSAnalysisState) -> dict:
             '  {"decision": "reject",\n'
             '   "what_is_wrong": "...",\n'
             '   "suggested_change": "...",\n'
-            '   "focus_cusips": [...]}             — reject, loop back to planner\n'
+            '   "focus_cusips": ["NEW1", "NEW2"]}  — reject and ADD new CUSIPs to the analysis\n'
+            "\nfocus_cusips: any CUSIPs listed here are MERGED into the existing CUSIP list.\n"
+            "To add CUSIPs (not replace), just list the ones to add.\n"
             "\nShorthand accepted: just type  approve  or  reject"
         ),
     }

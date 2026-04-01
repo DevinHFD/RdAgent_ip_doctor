@@ -84,7 +84,10 @@ planner:
 
   user: |-
     Question: {{ question }}
-    Extracted CUSIPs: {{ cusip_list }}
+
+    *** AUTHORITATIVE CUSIP LIST (use ALL of these — do not add or remove any) ***
+    {{ cusip_list | tojson }}
+
     Scenario parameters from question: {{ scenario_params }}
 
     Available model checkpoints (use exactly one of these paths):
@@ -102,8 +105,10 @@ planner:
     - What is wrong    : {{ human_feedback.what_is_wrong }}
     - Suggested change : {{ human_feedback.suggested_change }}
     - Focus CUSIPs     : {{ human_feedback.focus_cusips }}
+      (these have already been merged into the AUTHORITATIVE CUSIP LIST above)
 
     Please revise the plan to address the reviewer's concerns.
+    The CUSIP list above is final — include every CUSIP in data_spec.cusip_list.
     {% endif %}
 
 code_generator:
