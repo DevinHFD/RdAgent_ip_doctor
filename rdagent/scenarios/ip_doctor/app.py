@@ -2,16 +2,16 @@
 app.py — CLI entry point for the MBS prepayment attribution workflow.
 
 Usage (new session):
-    python -m rdagent.scenarios.mbs_prepayment.app \\
+    python -m rdagent.scenarios.ip_doctor.app \\
         "For CUSIP XYZ123, show what drove the CPR change from January to February."
 
 Resume an interrupted session:
-    python -m rdagent.scenarios.mbs_prepayment.app \\
+    python -m rdagent.scenarios.ip_doctor.app \\
         --session-id <uuid> \\
         "For CUSIP XYZ123, show what drove the CPR change from January to February."
 
 Skip human review (automated / testing):
-    python -m rdagent.scenarios.mbs_prepayment.app \\
+    python -m rdagent.scenarios.ip_doctor.app \\
         --skip-review \\
         "For CUSIP XYZ123, ..."
 
