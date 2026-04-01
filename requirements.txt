@@ -3,6 +3,8 @@ pydantic-settings
 langgraph>=0.2
 captum
 joblib
+markdown          # markdown → HTML for PDF generation
+weasyprint        # HTML → PDF with embedded images
 
 python-Levenshtein
 scikit-learn

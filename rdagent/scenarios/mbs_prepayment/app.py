@@ -142,6 +142,7 @@ def run_workflow(question: str, session_id: str, skip_review: bool = False) -> N
         "human_feedback": None,
         "report_markdown": None,
         "plot_paths": [],
+        "pdf_path": None,
         "iteration_count": 0,
         "session_id": session_id,
     }
@@ -173,6 +174,7 @@ def run_workflow(question: str, session_id: str, skip_review: bool = False) -> N
     final_state = graph.get_state(config).values
     report = final_state.get("report_markdown")
     plot_paths = final_state.get("plot_paths", [])
+    pdf_path = final_state.get("pdf_path")
 
     print("\n" + "=" * 70)
     print("  ANALYSIS REPORT")
@@ -187,7 +189,8 @@ def run_workflow(question: str, session_id: str, skip_review: bool = False) -> N
         for p in plot_paths:
             print(f"  {p}")
 
-    print(f"\nOutput directory: {final_state.get('analysis_plan', {})}")
+    if pdf_path:
+        print(f"\nPDF report : {pdf_path}")
     logger.info("Workflow complete.")
 
 

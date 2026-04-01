@@ -5,8 +5,12 @@ Attribution values (bar x-axis): IG output = SMM/CPR contribution per feature.
 Y-axis labels show the original-scale feature change between the two periods:
   cusip_attribution  : "WALA  (120.3 → 121.3, Δ+1.0)"
   scenario_comparison: "WALA  (base: 120.3 | shock: 125.1, Δ+4.8)"
+
+A self-contained PDF report (report.pdf) is also written to output_dir, with all
+plots embedded as base64 images so no external file references are needed.
 """
 
+import base64
 from collections import defaultdict
 from pathlib import Path
 
@@ -245,6 +249,87 @@ def _plot_scenario_comparison(result: ExecutionResult, output_dir: Path) -> list
 
 
 # ---------------------------------------------------------------------------
+# PDF generation
+# ---------------------------------------------------------------------------
+
+_PDF_CSS = """
+@page { margin: 2cm; size: A4; }
+body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 11pt; color: #222; }
+h1 { font-size: 18pt; border-bottom: 2px solid #444; padding-bottom: 4px; }
+h2 { font-size: 14pt; margin-top: 1.4em; color: #2c4770; border-bottom: 1px solid #ccc; }
+h3 { font-size: 12pt; color: #2c4770; }
+pre, code { background: #f4f4f4; border-radius: 3px; padding: 2px 5px; font-size: 9.5pt; }
+pre { padding: 8px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ccc; padding: 5px 8px; text-align: left; }
+th { background: #e8ecf0; }
+img.plot { max-width: 100%; height: auto; margin: 1em 0; display: block; page-break-inside: avoid; }
+hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
+"""
+
+
+def _generate_pdf(report_markdown: str, plot_paths: list[str], output_dir: Path) -> str:
+    """
+    Render report_markdown to a self-contained PDF with all plots embedded.
+
+    Plots are inserted between the markdown narrative and any existing image
+    references are ignored — instead each PNG in plot_paths is appended as a
+    separate full-width figure at the end of the document.
+
+    Returns the absolute path to the written PDF.
+    """
+    try:
+        import markdown as md_lib
+        from weasyprint import HTML, CSS
+    except ImportError as exc:
+        logger.warning(f"PDF generation skipped — missing dependency: {exc}. "
+                       "Install with: pip install markdown weasyprint")
+        return ""
+
+    # 1. Convert markdown narrative to HTML body
+    html_body = md_lib.markdown(
+        report_markdown,
+        extensions=["tables", "fenced_code", "nl2br"],
+    )
+
+    # 2. Build <img> tags for each plot, embedding PNGs as base64 data URIs
+    img_tags = []
+    for path_str in plot_paths:
+        p = Path(path_str)
+        if not p.exists():
+            logger.warning(f"Plot file not found, skipping in PDF: {p}")
+            continue
+        b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+        img_tags.append(
+            f'<figure>'
+            f'<img class="plot" src="data:image/png;base64,{b64}" alt="{p.name}" />'
+            f'<figcaption style="font-size:9pt;color:#555;">{p.name}</figcaption>'
+            f'</figure>'
+        )
+
+    plots_html = "\n".join(img_tags)
+
+    # 3. Assemble full HTML document
+    full_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>MBS Attribution Report</title></head>
+<body>
+{html_body}
+{('<hr/><h2>Attribution Plots</h2>' + plots_html) if img_tags else ''}
+</body>
+</html>"""
+
+    # 4. Write PDF
+    pdf_path = output_dir / "report.pdf"
+    HTML(string=full_html, base_url=str(output_dir)).write_pdf(
+        str(pdf_path),
+        stylesheets=[CSS(string=_PDF_CSS)],
+    )
+    logger.info(f"PDF report written to {pdf_path}")
+    return str(pdf_path)
+
+
+# ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
 
@@ -285,4 +370,13 @@ def reporter_node(state: MBSAnalysisState) -> dict:
     )
 
     logger.info(f"Report generated ({len(report_markdown)} chars). Plots: {plot_paths}")
-    return {"report_markdown": report_markdown, "plot_paths": plot_paths}
+
+    # Write markdown to disk
+    md_path = output_dir / "report.md"
+    md_path.write_text(report_markdown, encoding="utf-8")
+    logger.info(f"Markdown report written to {md_path}")
+
+    # Generate PDF with embedded plots
+    pdf_path = _generate_pdf(report_markdown, plot_paths, output_dir)
+
+    return {"report_markdown": report_markdown, "plot_paths": plot_paths, "pdf_path": pdf_path}

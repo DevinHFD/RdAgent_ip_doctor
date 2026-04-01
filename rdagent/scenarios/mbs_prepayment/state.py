@@ -98,6 +98,7 @@ class MBSAnalysisState(TypedDict):
     # Report
     report_markdown: str | None
     plot_paths: list[str]
+    pdf_path: str | None  # absolute path to report.pdf (set by reporter_node)
     # Metadata
     iteration_count: int
     session_id: str
