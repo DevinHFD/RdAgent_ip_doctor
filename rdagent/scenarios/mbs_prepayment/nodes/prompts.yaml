@@ -200,18 +200,23 @@ reporter:
       Use these for context only — they explain WHAT changed in the loan pool, not the attribution.
     - Summary statistics and metadata.
 
-    IMPORTANT: For every feature you discuss, you MUST report BOTH the before and after
-    values and the delta. Never say "WALA was 121.3 months" — always say
-    "WALA moved from 120.3 → 121.3 months (Δ+1.0)" or for scenario comparison
-    "WALA: base 120.3 → shock 125.1 (Δ+4.8 months)".
-    Use the Feature Change Summary table in the user message as your primary source for these values.
+    IMPORTANT RULES:
+    - The Feature Change Summary table is already sorted by |Mean Attribution| descending
+      (Rank 1 = most important). Use this rank order when listing top features.
+      DO NOT re-rank features based on feature delta size.
+    - The Model Predictions table has an "ALL CUSIPs (mean)" aggregate row at the top.
+      Use those aggregate numbers in the first paragraph — do NOT cite an individual CUSIP
+      as if it represents the whole portfolio.
+    - For every feature you discuss, report BOTH endpoints and the delta:
+      "WALA moved from 120.3 → 121.3 months (Δ+1.0)" — never just one value.
 
     Write a concise, insightful markdown report that:
-    1. Answers the analyst's question directly in the first paragraph
-    2. Identifies the top 3-5 most impactful features. For each, report:
+    1. Opens with the aggregate model forecast change: "Across N CUSIPs, the mean SMM
+       forecast moved from X → Y (Δ+Z)" using the ALL CUSIPs row from the predictions table.
+    2. Identifies the top 3-5 features ranked by |Mean Attribution| (use the Rank column).
+       For each, report:
        - The attribution magnitude (e.g., "+0.0012 SMM contribution")
-       - Both endpoints and delta from the Feature Change Summary table,
-         e.g. "WALA moved from 120.3 → 121.3 months (Δ+1.0)"
+       - Both endpoints and delta from the Feature Change Summary table
     3. Explains the economic intuition behind the top drivers
     4. Notes any CUSIPs or periods that behaved differently from the group
     5. References the plot filenames where relevant

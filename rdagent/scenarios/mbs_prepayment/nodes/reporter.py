@@ -184,29 +184,38 @@ def _build_feature_change_table(exec_result: ExecutionResult) -> str:
         delta_means = {f: after_means[f] - before_means[f]
                        for f in before_means if f in after_means}
 
+    # Sort by |mean attribution| from summary_stats — this is the importance ranking.
+    # Fall back to |Δ feature value| only when attribution stats are absent.
+    summary_stats = exec_result.summary_stats
     all_feats = sorted(
         set(before_means) | set(after_means) | set(delta_means),
-        key=lambda f: abs(delta_means.get(f, 0)),
+        key=lambda f: abs(summary_stats.get(f, {}).get("mean_attr", 0)),
         reverse=True,
     )
 
     if not all_feats:
         return "(No feature change data available.)"
 
-    header = f"  {'Feature':<28}  {col_before:>14}  {col_after:>14}  {'Δ Change':>10}"
-    sep    = "  " + "-" * 72
+    header = (
+        f"  {'Rank':<5}  {'Feature':<28}  {'Mean Attribution':>16}  "
+        f"{col_before:>14}  {col_after:>14}  {'Δ Feature':>10}"
+    )
+    sep = "  " + "-" * 95
     rows = [header, sep]
-    for feat in all_feats[:20]:
+    for rank, feat in enumerate(all_feats[:20], start=1):
+        attr_val = summary_stats.get(feat, {}).get("mean_attr")
         b = before_means.get(feat)
         a = after_means.get(feat)
         d = delta_means.get(feat)
-        b_s = f"{b:>14.4f}" if b is not None else f"{'—':>14}"
-        a_s = f"{a:>14.4f}" if a is not None else f"{'—':>14}"
-        d_s = f"{d:>+10.4f}" if d is not None else f"{'—':>10}"
-        rows.append(f"  {feat:<28}  {b_s}  {a_s}  {d_s}")
+        attr_s = f"{attr_val:>+16.6f}" if attr_val is not None else f"{'—':>16}"
+        b_s    = f"{b:>14.4f}" if b is not None else f"{'—':>14}"
+        a_s    = f"{a:>14.4f}" if a is not None else f"{'—':>14}"
+        d_s    = f"{d:>+10.4f}" if d is not None else f"{'—':>10}"
+        rows.append(f"  {rank:<5}  {feat:<28}  {attr_s}  {b_s}  {a_s}  {d_s}")
 
     note = (
-        "(values are averages across CUSIPs and periods; sorted by |Δ| descending)"
+        f"(averaged across all {len(exec_result.feature_values_original)} CUSIP(s) and periods; "
+        "sorted by |mean attribution| descending)"
     )
     return "\n".join(rows) + "\n" + note
 
@@ -241,6 +250,11 @@ def _build_prediction_summary(exec_result: ExecutionResult) -> str:
     sep = "  " + "-" * 72
     rows = [header, sep]
 
+    # Collect all valid values to compute cross-CUSIP aggregate
+    all_b: list[float] = []
+    all_a: list[float] = []
+    all_d: list[float] = []
+
     for cusip, cusip_data in preds.items():
         for period, vals in cusip_data.items():
             if not isinstance(vals, dict):
@@ -248,10 +262,27 @@ def _build_prediction_summary(exec_result: ExecutionResult) -> str:
             b = vals.get(key_before)
             a = vals.get(key_after)
             d = vals.get(key_delta)
+            if b is not None: all_b.append(b)
+            if a is not None: all_a.append(a)
+            if d is not None: all_d.append(d)
             b_s = f"{b:>10.6f}" if b is not None else f"{'—':>10}"
             a_s = f"{a:>10.6f}" if a is not None else f"{'—':>10}"
             d_s = f"{d:>+10.6f}" if d is not None else f"{'—':>10}"
             rows.append(f"  {cusip:<14} {period:<24} {b_s} {a_s} {d_s}")
+
+    # Aggregate row — insert after the header/sep so it appears first
+    if all_b or all_a or all_d:
+        n = len(preds)
+        avg_b = sum(all_b) / len(all_b) if all_b else None
+        avg_a = sum(all_a) / len(all_a) if all_a else None
+        avg_d = sum(all_d) / len(all_d) if all_d else None
+        avg_b_s = f"{avg_b:>10.6f}" if avg_b is not None else f"{'—':>10}"
+        avg_a_s = f"{avg_a:>10.6f}" if avg_a is not None else f"{'—':>10}"
+        avg_d_s = f"{avg_d:>+10.6f}" if avg_d is not None else f"{'—':>10}"
+        agg_row = f"  {'ALL CUSIPs (mean)':<38} {avg_b_s} {avg_a_s} {avg_d_s}  ← {n} CUSIPs"
+        # Insert aggregate right after the separator
+        rows.insert(2, agg_row)
+        rows.insert(3, sep)
 
     return "\n".join(rows)
 
