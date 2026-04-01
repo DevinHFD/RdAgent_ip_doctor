@@ -263,7 +263,8 @@ def _build_prediction_summary(exec_result: ExecutionResult) -> str:
 
 def _plot_cusip_attribution(result: ExecutionResult, output_dir: Path) -> list[str]:
     """
-    One horizontal bar chart per CUSIP (up to 10).
+    One horizontal bar chart per CUSIP, plus one aggregated chart averaged across
+    all CUSIPs (placed first in the returned list so it appears first in the PDF).
     X-axis : IG attribution (SMM/CPR contribution).
     Y-axis : "WALA  (120.3 → 121.3, Δ+1.0)"  — original-scale change between months.
     """
@@ -273,7 +274,13 @@ def _plot_cusip_attribution(result: ExecutionResult, output_dir: Path) -> list[s
 
     target_output = result.metadata.get("target_output", "output")
     paths = []
-    cusips = list(result.attributions_normalized.keys())[:10]
+    cusips = list(result.attributions_normalized.keys())
+
+    # ---- Accumulators for the aggregate chart ----
+    agg_attr:  dict[str, list[float]] = defaultdict(list)
+    agg_t0:    dict[str, list[float]] = defaultdict(list)
+    agg_t1:    dict[str, list[float]] = defaultdict(list)
+    agg_delta: dict[str, list[float]] = defaultdict(list)
 
     for cusip in cusips:
         attr_mean  = _avg_attributions(result.attributions_normalized.get(cusip, {}))
@@ -285,6 +292,16 @@ def _plot_cusip_attribution(result: ExecutionResult, output_dir: Path) -> list[s
         if not attr_mean:
             logger.warning(f"No valid attribution data for CUSIP {cusip}; skipping plot.")
             continue
+
+        # Accumulate for aggregate chart
+        for feat, val in attr_mean.items():
+            agg_attr[feat].append(val)
+        for feat, val in t0_means.items():
+            agg_t0[feat].append(val)
+        for feat, val in t1_means.items():
+            agg_t1[feat].append(val)
+        for feat, val in delta_means.items():
+            agg_delta[feat].append(val)
 
         sorted_items = sorted(attr_mean.items(), key=lambda kv: abs(kv[1]), reverse=True)[:15]
         features = [item[0] for item in sorted_items]
@@ -306,6 +323,37 @@ def _plot_cusip_attribution(result: ExecutionResult, output_dir: Path) -> list[s
         plt.close(fig)
         paths.append(str(path))
         logger.info(f"Saved attribution chart: {path}")
+
+    # ---- Aggregated chart (mean across all CUSIPs) ----
+    if agg_attr:
+        mean_attr  = {f: sum(v) / len(v) for f, v in agg_attr.items()}
+        mean_t0    = {f: sum(v) / len(v) for f, v in agg_t0.items()}
+        mean_t1    = {f: sum(v) / len(v) for f, v in agg_t1.items()}
+        mean_delta = {f: sum(v) / len(v) for f, v in agg_delta.items()}
+
+        sorted_items = sorted(mean_attr.items(), key=lambda kv: abs(kv[1]), reverse=True)[:15]
+        features = [item[0] for item in sorted_items]
+        values   = [item[1] for item in sorted_items]
+        colors   = ["#d62728" if v > 0 else "#1f77b4" for v in values]
+        labels   = _make_labels_cusip(features, mean_t0, mean_t1, mean_delta)
+
+        n_cusips = len(agg_attr[features[0]]) if features else len(cusips)
+        fig, ax = plt.subplots(figsize=(13, max(4, len(features) * 0.55)))
+        ax.barh(labels[::-1], values[::-1], color=colors[::-1])
+        ax.axvline(0, color="black", linewidth=0.8)
+        ax.set_xlabel(f"Mean IG Attribution  ({target_output.upper()} contribution)")
+        ax.set_title(
+            f"Aggregated Attribution — Mean across {n_cusips} CUSIP(s)\n"
+            f"(y-axis shows mean original-scale feature change)"
+        )
+        ax.tick_params(axis="y", labelsize=8)
+        fig.tight_layout()
+
+        agg_path = output_dir / "attribution_aggregated.png"
+        fig.savefig(agg_path, dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        paths.insert(0, str(agg_path))  # first in list → first in PDF
+        logger.info(f"Saved aggregated attribution chart: {agg_path}")
 
     return paths
 
