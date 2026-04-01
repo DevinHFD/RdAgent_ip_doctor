@@ -2,8 +2,8 @@
 executor node — runs generated attribution code in a subprocess.
 
 The generated script must write output.json conforming to ExecutionResult schema.
-All attribution values are expected to be present in both normalized and
-original (inverse-transformed) scales.
+Attribution values are IG output in SMM/CPR contribution units (no rescaling).
+Feature values are inverse-transformed to original scale for context only.
 """
 
 import json
@@ -70,7 +70,7 @@ def executor_node(state: MBSAnalysisState) -> dict:
         result = ExecutionResult.model_validate(raw)
         logger.info(
             f"Execution succeeded. "
-            f"CUSIPs in result: {len(result.attributions_original)}. "
+            f"CUSIPs in result: {len(result.attributions_normalized)}. "
             f"Features: {list(result.summary_stats.keys())[:5]}"
         )
         return {"execution_result": result.model_dump(), "execution_error": None}

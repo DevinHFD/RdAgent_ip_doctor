@@ -30,13 +30,13 @@ def _format_plan_summary(plan: dict) -> str:
 
 
 def _format_execution_summary(result: ExecutionResult) -> str:
-    """Show top-5 features by mean |attribution| in original scale."""
+    """Show top-5 features by mean |attribution| (SMM/CPR contribution)."""
     stats = result.summary_stats
-    ranked = sorted(stats.items(), key=lambda kv: abs(kv[1].get("mean_attr_original", 0)), reverse=True)
-    lines = ["Top features by mean |attribution| (original scale):"]
+    ranked = sorted(stats.items(), key=lambda kv: abs(kv[1].get("mean_attr", 0)), reverse=True)
+    lines = ["Top features by mean |attribution| (SMM/CPR contribution):"]
     for feat, s in ranked[:5]:
-        mean_val = s.get("mean_attr_original", 0)
-        std_val = s.get("std_attr_original", 0)
+        mean_val = s.get("mean_attr", 0)
+        std_val = s.get("std_attr", 0)
         lines.append(f"  {feat:30s}  mean={mean_val:+.4f}  std={std_val:.4f}")
     return "\n".join(lines)
 
