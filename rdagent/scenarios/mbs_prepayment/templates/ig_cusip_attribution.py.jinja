@@ -144,13 +144,21 @@ for cusip in CUSIP_LIST:
         # These values are in SMM/CPR contribution units — no rescaling applied.
         attr_np = np.concatenate(all_attr, axis=0).mean(axis=0)
 
-        # Inverse-transform t1 feature values to original scale for human context
-        # e.g. WALA: normalized -0.3 → original 118.5 months
-        x_t1_orig = scaler.inverse_transform(x_t1.numpy())  # [n_rows, n_features]
-        x_t1_orig_mean = x_t1_orig.mean(axis=0)             # [n_features]
+        # Inverse-transform BOTH months to original scale so the reviewer can see
+        # what changed (e.g. WALA: 120.3 → 121.3, Δ+1.0) alongside the attribution.
+        n = x_t1.shape[0]
+        x_t0_orig = scaler.inverse_transform(x_t0[:n].numpy())  # [n, n_features]
+        x_t1_orig = scaler.inverse_transform(x_t1.numpy())      # [n, n_features]
+        t0_mean   = x_t0_orig.mean(axis=0)                      # [n_features]
+        t1_mean   = x_t1_orig.mean(axis=0)                      # [n_features]
+        delta_mean = t1_mean - t0_mean                           # [n_features]
 
         attributions_normalized[cusip][period_key] = dict(zip(FEATURE_NAMES, attr_np.tolist()))
-        feature_values_original[cusip][period_key] = dict(zip(FEATURE_NAMES, x_t1_orig_mean.tolist()))
+        feature_values_original[cusip][period_key] = {
+            "t0":    dict(zip(FEATURE_NAMES, t0_mean.tolist())),
+            "t1":    dict(zip(FEATURE_NAMES, t1_mean.tolist())),
+            "delta": dict(zip(FEATURE_NAMES, delta_mean.tolist())),
+        }
 
 # ---------------------------------------------------------------------------
 # Summary statistics across all CUSIPs and periods

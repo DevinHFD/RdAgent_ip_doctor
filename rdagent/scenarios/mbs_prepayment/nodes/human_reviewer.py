@@ -29,15 +29,63 @@ def _format_plan_summary(plan: dict) -> str:
     )
 
 
+def _avg_feat_group(nested_orig: dict, group: str) -> dict[str, float]:
+    """
+    Average one sub-group (e.g. "t0", "t1", "delta", "base", "scenario")
+    across all CUSIPs and all valid period_keys.
+    nested_orig = {cusip: {period_key: {group: {feat: val}}}}
+    """
+    from collections import defaultdict
+    totals: dict[str, float] = defaultdict(float)
+    counts: dict[str, int] = defaultdict(int)
+    for cusip_data in nested_orig.values():
+        for period_data in cusip_data.values():
+            if not isinstance(period_data, dict) or "error" in period_data:
+                continue
+            for feat, val in period_data.get(group, {}).items():
+                if isinstance(val, (int, float)):
+                    totals[feat] += val
+                    counts[feat] += 1
+    return {feat: totals[feat] / counts[feat] for feat in totals if counts[feat] > 0}
+
+
 def _format_execution_summary(result: ExecutionResult) -> str:
-    """Show top-5 features by mean |attribution| (SMM/CPR contribution)."""
+    """
+    Show top-5 features by mean |attribution| (SMM/CPR contribution).
+    For cusip_attribution: also show t0 → t1 → Δ original-scale feature change.
+    For scenario_comparison: show base | scenario | Δ.
+    """
     stats = result.summary_stats
     ranked = sorted(stats.items(), key=lambda kv: abs(kv[1].get("mean_attr", 0)), reverse=True)
+
+    analysis_type = result.analysis_type
+    feat_orig = result.feature_values_original
+
+    if analysis_type == "cusip_attribution":
+        t0 = _avg_feat_group(feat_orig, "t0")
+        t1 = _avg_feat_group(feat_orig, "t1")
+        delta = _avg_feat_group(feat_orig, "delta")
+    else:
+        t0 = _avg_feat_group(feat_orig, "base")
+        t1 = _avg_feat_group(feat_orig, "scenario")
+        delta = _avg_feat_group(feat_orig, "delta")
+
     lines = ["Top features by mean |attribution| (SMM/CPR contribution):"]
+    lines.append(
+        f"  {'Feature':<28}  {'Attribution':>14}  {'Before':>10}  {'After':>10}  {'Δ':>10}"
+    )
+    lines.append("  " + "-" * 80)
     for feat, s in ranked[:5]:
         mean_val = s.get("mean_attr", 0)
-        std_val = s.get("std_attr", 0)
-        lines.append(f"  {feat:30s}  mean={mean_val:+.4f}  std={std_val:.4f}")
+        t0_val = t0.get(feat)
+        t1_val = t1.get(feat)
+        d_val = delta.get(feat)
+        t0_str = f"{t0_val:.3f}" if t0_val is not None else "—"
+        t1_str = f"{t1_val:.3f}" if t1_val is not None else "—"
+        d_str = f"{d_val:+.3f}" if d_val is not None else "—"
+        lines.append(
+            f"  {feat:<28}  {mean_val:>+14.4f}  {t0_str:>10}  {t1_str:>10}  {d_str:>10}"
+        )
     return "\n".join(lines)
 
 

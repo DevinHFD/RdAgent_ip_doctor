@@ -215,13 +215,20 @@ for cusip in CUSIP_LIST:
         # Run IG: attributions are in SMM/CPR contribution units — no rescaling applied.
         attr_mean = run_ig_batched(scenario_slice, baseline_slice)  # [n_features]
 
-        # Inverse-transform scenario feature values to original scale for human context
-        # e.g. WALA: normalized -0.3 → original 118.5 months
-        x_orig = scaler.inverse_transform(scenario_slice)  # [n_rows, n_features]
-        feat_orig_mean = x_orig.mean(axis=0)               # [n_features]
+        # Inverse-transform base AND scenario to original scale so the reviewer can see
+        # what changed (e.g. WALA: 120.3 base → 120.3 shock, Δ=0.0) alongside the attribution.
+        x_base_orig     = scaler.inverse_transform(base_slice)      # [n_rows, n_features]
+        x_scenario_orig = scaler.inverse_transform(scenario_slice)  # [n_rows, n_features]
+        base_mean       = x_base_orig.mean(axis=0)                  # [n_features]
+        scenario_mean   = x_scenario_orig.mean(axis=0)              # [n_features]
+        delta_mean      = scenario_mean - base_mean                  # [n_features]
 
         cusip_attr_norm[scenario] = {feat: float(v) for feat, v in zip(FEATURE_NAMES, attr_mean)}
-        cusip_feat_orig[scenario] = {feat: float(v) for feat, v in zip(FEATURE_NAMES, feat_orig_mean)}
+        cusip_feat_orig[scenario] = {
+            "base":     dict(zip(FEATURE_NAMES, base_mean.tolist())),
+            "scenario": dict(zip(FEATURE_NAMES, scenario_mean.tolist())),
+            "delta":    dict(zip(FEATURE_NAMES, delta_mean.tolist())),
+        }
 
     if cusip_attr_norm:
         attributions_normalized[cusip] = cusip_attr_norm
@@ -276,4 +283,4 @@ with open(output_path, "w") as f:
     json.dump(output, f, indent=2)
 
 print(f"\n[ig_scenario_comparison] Done. Output written to {output_path}", flush=True)
-print(f"  CUSIPs processed: {list(attributions_original.keys())}", flush=True)
+print(f"  CUSIPs processed: {list(attributions_normalized.keys())}", flush=True)
