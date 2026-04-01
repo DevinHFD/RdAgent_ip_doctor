@@ -172,6 +172,7 @@ if "base" not in SCENARIO_PARAMS:
 
 attributions_normalized: dict = {}   # CUSIP -> scenario -> {feature: IG value (SMM/CPR contribution)}
 feature_values_original: dict = {}   # CUSIP -> scenario -> {feature: original-scale value for context}
+model_predictions: dict = {}         # CUSIP -> scenario -> {base_smm, scenario_smm, delta_smm, ...}
 
 for cusip in CUSIP_LIST:
     print(f"\n[ig_scenario_comparison] Processing CUSIP={cusip}", flush=True)
@@ -185,6 +186,7 @@ for cusip in CUSIP_LIST:
 
     cusip_attr_norm = {}
     cusip_feat_orig = {}
+    cusip_preds = {}
 
     for scenario in scenarios_to_run:
         print(f"  Scenario: {scenario}", flush=True)
@@ -223,16 +225,32 @@ for cusip in CUSIP_LIST:
         scenario_mean   = x_scenario_orig.mean(axis=0)              # [n_features]
         delta_mean      = scenario_mean - base_mean                  # [n_features]
 
+        # Model predictions: run model on base and scenario to get SMM/CPR forecast
+        base_t = torch.tensor(base_slice, dtype=torch.float32)
+        scen_t = torch.tensor(scenario_slice, dtype=torch.float32)
+        with torch.no_grad():
+            pred_base = model(base_t).numpy()   # [n_rows, 2]  (col 0=CPR, col 1=SMM)
+            pred_scen = model(scen_t).numpy()   # [n_rows, 2]
+        base_smm = float(pred_base[:, 1].mean()) if pred_base.shape[1] > 1 else float(pred_base[:, 0].mean())
+        scen_smm = float(pred_scen[:, 1].mean()) if pred_scen.shape[1] > 1 else float(pred_scen[:, 0].mean())
+        base_cpr = float(pred_base[:, 0].mean())
+        scen_cpr = float(pred_scen[:, 0].mean())
+
         cusip_attr_norm[scenario] = {feat: float(v) for feat, v in zip(FEATURE_NAMES, attr_mean)}
         cusip_feat_orig[scenario] = {
             "base":     dict(zip(FEATURE_NAMES, base_mean.tolist())),
             "scenario": dict(zip(FEATURE_NAMES, scenario_mean.tolist())),
             "delta":    dict(zip(FEATURE_NAMES, delta_mean.tolist())),
         }
+        cusip_preds[scenario] = {
+            "base_smm": base_smm, "scenario_smm": scen_smm, "delta_smm": scen_smm - base_smm,
+            "base_cpr": base_cpr, "scenario_cpr": scen_cpr, "delta_cpr": scen_cpr - base_cpr,
+        }
 
     if cusip_attr_norm:
         attributions_normalized[cusip] = cusip_attr_norm
         feature_values_original[cusip] = cusip_feat_orig
+        model_predictions[cusip] = cusip_preds
 
 # ---------------------------------------------------------------------------
 # Summary stats: aggregate across all CUSIPs and scenarios
@@ -265,6 +283,7 @@ output = {
     "analysis_type": "scenario_comparison",
     "attributions_normalized": attributions_normalized,
     "feature_values_original": feature_values_original,
+    "model_predictions": model_predictions,
     "metadata": {
         "cusip_list":          CUSIP_LIST,
         "scenarios_compared":  scenarios_to_run,

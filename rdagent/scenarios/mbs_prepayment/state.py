@@ -67,6 +67,7 @@ class ExecutionResult(BaseModel):
     analysis_type: Literal["cusip_attribution", "scenario_comparison"]
     attributions_normalized: dict
     feature_values_original: dict
+    model_predictions: dict = Field(default_factory=dict)  # CUSIP -> period_key -> {"t0_smm", "t1_smm", "delta_smm", ...}
     metadata: dict
     summary_stats: dict  # feature_name -> {"mean_attr": float, "std_attr": float}
 

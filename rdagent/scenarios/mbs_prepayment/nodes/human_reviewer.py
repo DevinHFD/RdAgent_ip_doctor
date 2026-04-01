@@ -64,11 +64,43 @@ def _avg_feat_group(nested_orig: dict, group: str) -> dict[str, float]:
     return {feat: totals[feat] / counts[feat] for feat in totals if counts[feat] > 0}
 
 
+def _format_prediction_summary(result: ExecutionResult) -> str:
+    """Show model SMM/CPR predictions per CUSIP and period."""
+    preds = result.model_predictions
+    if not preds:
+        return ""
+
+    analysis_type = result.analysis_type
+    if analysis_type == "cusip_attribution":
+        col_b, col_a = "T0 SMM", "T1 SMM"
+        k_b, k_a, k_d = "t0_smm", "t1_smm", "delta_smm"
+    else:
+        col_b, col_a = "Base SMM", "Scen SMM"
+        k_b, k_a, k_d = "base_smm", "scenario_smm", "delta_smm"
+
+    lines = [
+        "\nModel SMM Predictions:",
+        f"  {'CUSIP':<14} {'Period/Scenario':<24} {col_b:>10} {col_a:>10} {'Δ SMM':>10}",
+        "  " + "-" * 72,
+    ]
+    for cusip, cusip_data in preds.items():
+        for period, vals in cusip_data.items():
+            if not isinstance(vals, dict):
+                continue
+            b = vals.get(k_b)
+            a = vals.get(k_a)
+            d = vals.get(k_d)
+            b_s = f"{b:>10.6f}" if b is not None else f"{'—':>10}"
+            a_s = f"{a:>10.6f}" if a is not None else f"{'—':>10}"
+            d_s = f"{d:>+10.6f}" if d is not None else f"{'—':>10}"
+            lines.append(f"  {cusip:<14} {period:<24} {b_s} {a_s} {d_s}")
+    return "\n".join(lines)
+
+
 def _format_execution_summary(result: ExecutionResult) -> str:
     """
-    Show top-5 features by mean |attribution| (SMM/CPR contribution).
-    For cusip_attribution: also show t0 → t1 → Δ original-scale feature change.
-    For scenario_comparison: show base | scenario | Δ.
+    Show top-5 features by mean |attribution| (SMM/CPR contribution),
+    model SMM predictions per CUSIP/period, and original-scale feature changes.
     """
     stats = result.summary_stats
     ranked = sorted(stats.items(), key=lambda kv: abs(kv[1].get("mean_attr", 0)), reverse=True)
@@ -101,6 +133,12 @@ def _format_execution_summary(result: ExecutionResult) -> str:
         lines.append(
             f"  {feat:<28}  {mean_val:>+14.4f}  {t0_str:>10}  {t1_str:>10}  {d_str:>10}"
         )
+
+    # Append model predictions
+    pred_text = _format_prediction_summary(result)
+    if pred_text:
+        lines.append(pred_text)
+
     return "\n".join(lines)
 
 

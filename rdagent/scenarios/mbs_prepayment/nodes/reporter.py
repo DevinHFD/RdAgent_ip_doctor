@@ -154,10 +154,30 @@ def _build_feature_change_table(exec_result: ExecutionResult) -> str:
         before_key, after_key = "base", "scenario"
         col_before, col_after = "Base", "Scenario"
 
-    # Aggregate per-CUSIP data (cusip level here)
-    before_means = _avg_feat_group(feat_orig, before_key)
-    after_means  = _avg_feat_group(feat_orig, after_key)
-    delta_means  = _avg_feat_group(feat_orig, "delta")
+    # Aggregate across all CUSIPs — _avg_feat_group expects single-CUSIP
+    # data {period_key: {"t0": {...}}}, so we must iterate cusips ourselves.
+    from collections import defaultdict as _dd
+    before_totals: dict[str, float] = _dd(float)
+    before_counts: dict[str, int] = _dd(int)
+    after_totals: dict[str, float] = _dd(float)
+    after_counts: dict[str, int] = _dd(int)
+    delta_totals: dict[str, float] = _dd(float)
+    delta_counts: dict[str, int] = _dd(int)
+
+    for cusip_data in feat_orig.values():
+        b = _avg_feat_group(cusip_data, before_key)
+        a = _avg_feat_group(cusip_data, after_key)
+        d = _avg_feat_group(cusip_data, "delta")
+        for f, v in b.items():
+            before_totals[f] += v; before_counts[f] += 1
+        for f, v in a.items():
+            after_totals[f] += v; after_counts[f] += 1
+        for f, v in d.items():
+            delta_totals[f] += v; delta_counts[f] += 1
+
+    before_means = {f: before_totals[f] / before_counts[f] for f in before_totals}
+    after_means  = {f: after_totals[f] / after_counts[f] for f in after_totals}
+    delta_means  = {f: delta_totals[f] / delta_counts[f] for f in delta_totals}
 
     # Fall back: compute delta from before/after if delta group is missing
     if not delta_means and before_means and after_means:
@@ -189,6 +209,51 @@ def _build_feature_change_table(exec_result: ExecutionResult) -> str:
         "(values are averages across CUSIPs and periods; sorted by |Δ| descending)"
     )
     return "\n".join(rows) + "\n" + note
+
+
+def _build_prediction_summary(exec_result: ExecutionResult) -> str:
+    """
+    Build a summary of model SMM/CPR predictions for each CUSIP and period.
+
+    For cusip_attribution:
+      CUSIP          Period                T0 SMM    T1 SMM    Δ SMM
+      ABC123         2023-01->2023-02      0.0123    0.0145    +0.0022
+      ...
+
+    For scenario_comparison:
+      CUSIP          Scenario              Base SMM  Scen SMM  Δ SMM
+      ABC123         rate_shock            0.0123    0.0200    +0.0077
+      ...
+    """
+    preds = exec_result.model_predictions
+    if not preds:
+        return "(No model predictions available — re-run with latest templates.)"
+
+    analysis_type = exec_result.analysis_type
+    if analysis_type == "cusip_attribution":
+        col_before, col_after = "T0 SMM", "T1 SMM"
+        key_before, key_after, key_delta = "t0_smm", "t1_smm", "delta_smm"
+    else:
+        col_before, col_after = "Base SMM", "Scen SMM"
+        key_before, key_after, key_delta = "base_smm", "scenario_smm", "delta_smm"
+
+    header = f"  {'CUSIP':<14} {'Period/Scenario':<24} {col_before:>10} {col_after:>10} {'Δ SMM':>10}"
+    sep = "  " + "-" * 72
+    rows = [header, sep]
+
+    for cusip, cusip_data in preds.items():
+        for period, vals in cusip_data.items():
+            if not isinstance(vals, dict):
+                continue
+            b = vals.get(key_before)
+            a = vals.get(key_after)
+            d = vals.get(key_delta)
+            b_s = f"{b:>10.6f}" if b is not None else f"{'—':>10}"
+            a_s = f"{a:>10.6f}" if a is not None else f"{'—':>10}"
+            d_s = f"{d:>+10.6f}" if d is not None else f"{'—':>10}"
+            rows.append(f"  {cusip:<14} {period:<24} {b_s} {a_s} {d_s}")
+
+    return "\n".join(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -438,12 +503,14 @@ def reporter_node(state: MBSAnalysisState) -> dict:
 
     logger.info("Generating LLM narrative report.")
     feature_change_table = _build_feature_change_table(exec_result)
+    prediction_summary = _build_prediction_summary(exec_result)
     sys_prompt = T(".prompts:reporter.system").r()
     user_prompt = T(".prompts:reporter.user").r(
         question=state["question"],
         analysis_type=analysis_type,
         attributions_normalized=exec_result.attributions_normalized,
         feature_change_table=feature_change_table,
+        prediction_summary=prediction_summary,
         summary_stats=exec_result.summary_stats,
         metadata=exec_result.metadata,
         plot_paths=plot_paths,

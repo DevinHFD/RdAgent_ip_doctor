@@ -178,6 +178,9 @@ reporter:
 
     You will be given:
     - The original analyst question
+    - Model predictions: the model's SMM/CPR forecast for each CUSIP and period (T0 and T1,
+      or base and scenario). Report these prominently — e.g., "The model's SMM forecast
+      moved from 0.0123 (Jan) to 0.0145 (Feb), a Δ of +0.0022."
     - Attribution values (IG output): how much each feature contributed to the SMM/CPR change.
       These are in model-output units (e.g., 0.001 means the feature contributed +0.001 SMM).
     - Feature values in ORIGINAL scale showing how features changed between the two periods:
@@ -226,6 +229,9 @@ reporter:
     Do NOT report only one period's value — always cite both endpoints and the delta.
 
     {{ feature_change_table }}
+
+    ## Model Predictions (SMM/CPR forecast for each period)
+    {{ prediction_summary }}
 
     ## Attribution Results (SMM/CPR contribution per feature)
     {{ attributions_normalized | tojson(indent=2) }}
