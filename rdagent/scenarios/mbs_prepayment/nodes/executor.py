@@ -59,7 +59,7 @@ def executor_node(state: MBSAnalysisState) -> dict:
         logger.warning(f"Execution failed (exit {proc.returncode}).")
         return {"execution_result": None, "execution_error": error_msg}
 
-    output_path = work_dir / "output.json"
+    output_path = MBS_SETTINGS.output_dir.resolve() / "output.json"
     if not output_path.exists():
         msg = "output.json not found after successful script exit."
         logger.warning(msg)

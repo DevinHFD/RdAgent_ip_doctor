@@ -72,7 +72,7 @@ def code_generator_node(state: MBSAnalysisState) -> dict:
     code = template.render(
         plan=plan.model_dump(),
         mbs_settings=MBS_SETTINGS.model_dump(mode="json"),
-        output_dir=str(MBS_SETTINGS.output_dir),
+        output_dir=str(MBS_SETTINGS.output_dir.resolve()),  # absolute so subprocess cwd doesn't matter
     )
     logger.info("Template rendered successfully.")
     return {"generated_code": code, "validation_errors": []}
