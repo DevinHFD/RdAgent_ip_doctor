@@ -44,18 +44,33 @@ def _avg_attributions(nested: dict) -> dict[str, float]:
     return {feat: totals[feat] / counts[feat] for feat in totals if counts[feat] > 0}
 
 
+_KNOWN_SUBKEYS = {"t0", "t1", "delta", "base", "scenario", "error"}
+
+
 def _avg_feat_group(nested_orig: dict, group: str) -> dict[str, float]:
     """
     Average one sub-group (e.g. "t0", "t1", "delta", "base", "scenario")
     across all valid periods.
     nested_orig = {period_key: {"t0": {feat: val}, "t1": ..., "delta": ...}}
+
+    Falls back gracefully when period_data uses the old flat format
+    {feat: val} (no sub-group keys). In that case only "t1" / "scenario"
+    groups return data; "t0" / "base" / "delta" return {}.
     """
     totals: dict[str, float] = defaultdict(float)
     counts: dict[str, int] = defaultdict(int)
     for period_data in nested_orig.values():
         if not isinstance(period_data, dict) or "error" in period_data:
             continue
-        group_data = period_data.get(group, {})
+        # Detect old flat format: no recognised sub-group key present
+        if not any(k in period_data for k in _KNOWN_SUBKEYS):
+            # Old format — period_data IS the feature dict (single time point)
+            if group in ("t1", "scenario"):
+                group_data = period_data
+            else:
+                group_data = {}
+        else:
+            group_data = period_data.get(group, {})
         for feat, val in group_data.items():
             if isinstance(val, (int, float)):
                 totals[feat] += val
@@ -105,6 +120,75 @@ def _make_labels_scenario(features: list[str],
         else:
             labels.append(feat)
     return labels
+
+
+# ---------------------------------------------------------------------------
+# Feature change table for LLM prompt
+# ---------------------------------------------------------------------------
+
+
+def _build_feature_change_table(exec_result: ExecutionResult) -> str:
+    """
+    Build a compact, human-readable table of feature changes for the LLM prompt.
+
+    For cusip_attribution:
+      Feature              T0 (before)   T1 (after)      Δ Change
+      WALA                     120.30       121.30          +1.00
+      ...
+
+    For scenario_comparison:
+      Feature              Base           Scenario         Δ Change
+      WALA                     120.30       125.10          +4.80
+      ...
+
+    All values are averages across CUSIPs and periods.
+    Sorted by |Δ| descending so the biggest movers appear first.
+    """
+    analysis_type = exec_result.analysis_type
+    feat_orig = exec_result.feature_values_original
+
+    if analysis_type == "cusip_attribution":
+        before_key, after_key = "t0", "t1"
+        col_before, col_after = "T0 (before)", "T1 (after)"
+    else:
+        before_key, after_key = "base", "scenario"
+        col_before, col_after = "Base", "Scenario"
+
+    # Aggregate per-CUSIP data (cusip level here)
+    before_means = _avg_feat_group(feat_orig, before_key)
+    after_means  = _avg_feat_group(feat_orig, after_key)
+    delta_means  = _avg_feat_group(feat_orig, "delta")
+
+    # Fall back: compute delta from before/after if delta group is missing
+    if not delta_means and before_means and after_means:
+        delta_means = {f: after_means[f] - before_means[f]
+                       for f in before_means if f in after_means}
+
+    all_feats = sorted(
+        set(before_means) | set(after_means) | set(delta_means),
+        key=lambda f: abs(delta_means.get(f, 0)),
+        reverse=True,
+    )
+
+    if not all_feats:
+        return "(No feature change data available.)"
+
+    header = f"  {'Feature':<28}  {col_before:>14}  {col_after:>14}  {'Δ Change':>10}"
+    sep    = "  " + "-" * 72
+    rows = [header, sep]
+    for feat in all_feats[:20]:
+        b = before_means.get(feat)
+        a = after_means.get(feat)
+        d = delta_means.get(feat)
+        b_s = f"{b:>14.4f}" if b is not None else f"{'—':>14}"
+        a_s = f"{a:>14.4f}" if a is not None else f"{'—':>14}"
+        d_s = f"{d:>+10.4f}" if d is not None else f"{'—':>10}"
+        rows.append(f"  {feat:<28}  {b_s}  {a_s}  {d_s}")
+
+    note = (
+        "(values are averages across CUSIPs and periods; sorted by |Δ| descending)"
+    )
+    return "\n".join(rows) + "\n" + note
 
 
 # ---------------------------------------------------------------------------
@@ -353,12 +437,13 @@ def reporter_node(state: MBSAnalysisState) -> dict:
         plot_paths = _plot_scenario_comparison(exec_result, output_dir)
 
     logger.info("Generating LLM narrative report.")
+    feature_change_table = _build_feature_change_table(exec_result)
     sys_prompt = T(".prompts:reporter.system").r()
     user_prompt = T(".prompts:reporter.user").r(
         question=state["question"],
         analysis_type=analysis_type,
         attributions_normalized=exec_result.attributions_normalized,
-        feature_values_original=exec_result.feature_values_original,
+        feature_change_table=feature_change_table,
         summary_stats=exec_result.summary_stats,
         metadata=exec_result.metadata,
         plot_paths=plot_paths,

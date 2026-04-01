@@ -29,11 +29,18 @@ def _format_plan_summary(plan: dict) -> str:
     )
 
 
+_KNOWN_SUBKEYS = {"t0", "t1", "delta", "base", "scenario", "error"}
+
+
 def _avg_feat_group(nested_orig: dict, group: str) -> dict[str, float]:
     """
     Average one sub-group (e.g. "t0", "t1", "delta", "base", "scenario")
     across all CUSIPs and all valid period_keys.
     nested_orig = {cusip: {period_key: {group: {feat: val}}}}
+
+    Falls back gracefully when period_data uses the old flat format
+    {feat: val} (no sub-group keys). In that case only "t1" / "scenario"
+    groups return data; "t0" / "base" / "delta" return {}.
     """
     from collections import defaultdict
     totals: dict[str, float] = defaultdict(float)
@@ -42,7 +49,15 @@ def _avg_feat_group(nested_orig: dict, group: str) -> dict[str, float]:
         for period_data in cusip_data.values():
             if not isinstance(period_data, dict) or "error" in period_data:
                 continue
-            for feat, val in period_data.get(group, {}).items():
+            # Detect old flat format: no recognised sub-group key present
+            if not any(k in period_data for k in _KNOWN_SUBKEYS):
+                if group in ("t1", "scenario"):
+                    group_data = period_data
+                else:
+                    group_data = {}
+            else:
+                group_data = period_data.get(group, {})
+            for feat, val in group_data.items():
                 if isinstance(val, (int, float)):
                     totals[feat] += val
                     counts[feat] += 1

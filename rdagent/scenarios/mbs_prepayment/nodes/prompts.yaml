@@ -192,12 +192,18 @@ reporter:
       Use these for context only — they explain WHAT changed in the loan pool, not the attribution.
     - Summary statistics and metadata.
 
+    IMPORTANT: For every feature you discuss, you MUST report BOTH the before and after
+    values and the delta. Never say "WALA was 121.3 months" — always say
+    "WALA moved from 120.3 → 121.3 months (Δ+1.0)" or for scenario comparison
+    "WALA: base 120.3 → shock 125.1 (Δ+4.8 months)".
+    Use the Feature Change Summary table in the user message as your primary source for these values.
+
     Write a concise, insightful markdown report that:
     1. Answers the analyst's question directly in the first paragraph
     2. Identifies the top 3-5 most impactful features. For each, report:
        - The attribution magnitude (e.g., "+0.0012 SMM contribution")
-       - The original-scale feature change, e.g. "WALA moved from 120.3 → 121.3 months (Δ+1.0)"
-         or for scenario: "WALA: base 120.3 | shock 125.1 (Δ+4.8 months)"
+       - Both endpoints and delta from the Feature Change Summary table,
+         e.g. "WALA moved from 120.3 → 121.3 months (Δ+1.0)"
     3. Explains the economic intuition behind the top drivers
     4. Notes any CUSIPs or periods that behaved differently from the group
     5. References the plot filenames where relevant
@@ -214,13 +220,17 @@ reporter:
     ## Analysis Type
     {{ analysis_type }}
 
+    ## Feature Change Summary (original scale — USE THIS as the primary reference)
+    The table below shows how each feature changed between the two periods being compared.
+    Use the Before and After columns (and Δ) when describing how features moved.
+    Do NOT report only one period's value — always cite both endpoints and the delta.
+
+    {{ feature_change_table }}
+
     ## Attribution Results (SMM/CPR contribution per feature)
     {{ attributions_normalized | tojson(indent=2) }}
 
-    ## Feature Values in Original Scale (context only)
-    {{ feature_values_original | tojson(indent=2) }}
-
-    ## Summary Statistics
+    ## Summary Statistics (attribution magnitude per feature)
     {{ summary_stats | tojson(indent=2) }}
 
     ## Metadata
