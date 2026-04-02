@@ -474,24 +474,45 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=bool(inp_inter)),
             )
 
+        def _err_update(hist, st, msg: str):
+            """Yield a single error update that re-enables the input."""
+            import traceback
+            hist = _add_bot(hist or [], f"❌ **Server error:**\n```\n{msg}\n```")
+            yield _build_updates(hist, st, "", False, False, False, None, None, True)
+
         # Named generator functions — lambdas are NOT detected as generators by
-        # inspect.isgeneratorfunction, which causes Gradio to return an HTML error
-        # page instead of streaming SSE, leading to "unexpected token <" in browser.
+        # inspect.isgeneratorfunction, causing Gradio to return HTML instead of SSE.
         def _do_submit(msg, hist, st):
-            for tup in submit_fn(msg, hist, st):
-                yield _build_updates(*tup)
+            try:
+                for tup in submit_fn(msg, hist, st):
+                    yield _build_updates(*tup)
+            except Exception:
+                import traceback
+                yield from _err_update(hist, st, traceback.format_exc())
 
         def _do_approve(hist, st):
-            for tup in approve_fn(hist, st):
-                yield _build_updates(*tup)
+            try:
+                for tup in approve_fn(hist, st):
+                    yield _build_updates(*tup)
+            except Exception:
+                import traceback
+                yield from _err_update(hist, st, traceback.format_exc())
 
         def _do_open_reject(hist, st):
             # open_reject_fn returns a plain tuple, not a generator
-            yield _build_updates(*open_reject_fn(hist, st))
+            try:
+                yield _build_updates(*open_reject_fn(hist, st))
+            except Exception:
+                import traceback
+                yield from _err_update(hist, st, traceback.format_exc())
 
         def _do_submit_reject(w, s, c, hist, st):
-            for tup in submit_reject_fn(w, s, c, hist, st):
-                yield _build_updates(*tup)
+            try:
+                for tup in submit_reject_fn(w, s, c, hist, st):
+                    yield _build_updates(*tup)
+            except Exception:
+                import traceback
+                yield from _err_update(hist, st, traceback.format_exc())
 
         # ── Wire events ──────────────────────────────────────────────────────
         send_event_kw = dict(
