@@ -16,6 +16,8 @@ An agentic workflow that answers natural language questions about an MBS prepaym
 8. [Data & Model Requirements](#data--model-requirements)
 9. [Configuration Reference](#configuration-reference)
 10. [Running the Workflow](#running-the-workflow)
+    - [Streamlit Chat UI](#streamlit-chat-ui) ← **recommended**
+    - [CLI](#cli)
 11. [Human Review Interface](#human-review-interface)
 12. [Output Files](#output-files)
 13. [Workflow Internals](#workflow-internals)
@@ -138,6 +140,7 @@ rdagent/scenarios/mbs_prepayment/
 ├── README.md                            # this file
 ├── __init__.py                          # exports build_graph
 ├── app.py                               # CLI entry point (typer)
+├── streamlit_app.py                     # Streamlit chatbot UI  ← NEW
 ├── conf.py                              # MBSPrepaymentSettings (pydantic-settings)
 ├── graph.py                             # LangGraph StateGraph assembly
 ├── state.py                             # MBSAnalysisState TypedDict + Pydantic models
@@ -167,6 +170,7 @@ rdagent/scenarios/mbs_prepayment/
 - A `sklearn.preprocessing.StandardScaler` saved with `joblib.dump()` (`.sav`)
 - Loan-level data in a single Parquet file with `cusip` and `fh_effdt` columns
 - An OpenAI-compatible LLM API key (GPT-4o recommended)
+- `streamlit` (for the chat UI — `pip install streamlit`)
 
 ---
 
@@ -301,7 +305,59 @@ MBS_SKIP_HUMAN_REVIEW=false                 # true = auto-approve (CI / batch ru
 
 ## Running the Workflow
 
-### Month-over-month attribution (single CUSIP)
+### Streamlit Chat UI
+
+The recommended way to interact with the workflow is the **Streamlit chatbot UI**, which provides a Claude Code–inspired interface with:
+
+- **Live step-by-step progress** — compact icon + label pills appear as each agent node fires (`🔍 Parsing question`, `🗺️ Planning analysis`, `⚡ Running attribution`, …)
+- **Rich human review card** — when the graph pauses for review you see a structured plan summary, an inline attribution bar chart, and **Approve / Reject** controls with a rejection form
+- **Persistent chat history** — all past questions, steps, review decisions, and final reports are preserved in the session
+- **Sidebar** — session ID, live status badge, example questions, and a New Session button
+
+#### Install Streamlit
+
+```bash
+pip install streamlit
+```
+
+#### Launch
+
+```bash
+# From the repo root
+streamlit run rdagent/scenarios/mbs_prepayment/streamlit_app.py
+```
+
+Streamlit will open `http://localhost:8501` in your browser automatically.
+
+You can override the port or set it headless for remote servers:
+
+```bash
+streamlit run rdagent/scenarios/mbs_prepayment/streamlit_app.py \
+    --server.port 8080 \
+    --server.headless true
+```
+
+#### UI walkthrough
+
+1. **Type a question** in the chat box at the bottom (or click an example in the sidebar).
+2. **Watch the steps** appear live — each agent node shows a colour-coded pill:
+   - 🔵 Blue  = currently running
+   - 🟢 Green = completed successfully
+   - 🔴 Red   = error
+3. **Review card** appears when the executor finishes. It shows:
+   - The structured analysis plan (type, CUSIPs, baseline strategy, rationale)
+   - A horizontal bar chart of the top feature attributions (green = positive CPR/SMM contribution, red = negative)
+   - An **Approve ✓** button to proceed to the final report
+   - A **Reject ✗** option that expands a form asking *What is wrong?*, *Suggested change*, and optional *Focus CUSIPs*
+4. **Final report** is rendered as formatted markdown with embedded attribution plots.
+
+#### Environment variables
+
+All `MBS_*` settings (paths, IG parameters, timeouts) are read from `.env` exactly as with the CLI — no extra configuration needed for the UI.
+
+---
+
+### CLI
 
 ```bash
 python -m rdagent.scenarios.mbs_prepayment.app \
@@ -357,6 +413,15 @@ python -m rdagent.scenarios.mbs_prepayment.app \
 ---
 
 ## Human Review Interface
+
+The workflow always pauses after a successful IG execution so you can inspect the plan and results before generating the final report. The interface differs by entry point:
+
+| Entry point | Review experience |
+|-------------|-------------------|
+| **Streamlit UI** | Amber-bordered review card with attribution bar chart, structured plan details, and Approve / Reject buttons |
+| **CLI** | Plain-text summary printed to stdout; type `approve` or `reject` at the prompt |
+
+### CLI review prompt
 
 When IG execution succeeds the workflow pauses and shows:
 
