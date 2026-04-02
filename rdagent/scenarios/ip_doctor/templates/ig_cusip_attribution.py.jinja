@@ -96,6 +96,7 @@ def load_cusip_month(cusip: str, month: str) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 attributions_normalized = {}
 feature_values_original = {}
+model_predictions = {}
 
 months = COMPARISON_MONTHS or []
 if len(months) < 2:
@@ -104,6 +105,7 @@ if len(months) < 2:
 for cusip in CUSIP_LIST:
     attributions_normalized[cusip] = {}
     feature_values_original[cusip] = {}
+    model_predictions[cusip] = {}
 
     for i in range(len(months) - 1):
         month_t0, month_t1 = months[i], months[i + 1]
@@ -144,13 +146,34 @@ for cusip in CUSIP_LIST:
         # These values are in SMM/CPR contribution units — no rescaling applied.
         attr_np = np.concatenate(all_attr, axis=0).mean(axis=0)
 
-        # Inverse-transform t1 feature values to original scale for human context
-        # e.g. WALA: normalized -0.3 → original 118.5 months
-        x_t1_orig = scaler.inverse_transform(x_t1.numpy())  # [n_rows, n_features]
-        x_t1_orig_mean = x_t1_orig.mean(axis=0)             # [n_features]
+        # Inverse-transform BOTH months to original scale so the reviewer can see
+        # what changed (e.g. WALA: 120.3 → 121.3, Δ+1.0) alongside the attribution.
+        n = x_t1.shape[0]
+        x_t0_orig = scaler.inverse_transform(x_t0[:n].numpy())  # [n, n_features]
+        x_t1_orig = scaler.inverse_transform(x_t1.numpy())      # [n, n_features]
+        t0_mean   = x_t0_orig.mean(axis=0)                      # [n_features]
+        t1_mean   = x_t1_orig.mean(axis=0)                      # [n_features]
+        delta_mean = t1_mean - t0_mean                           # [n_features]
+
+        # Model predictions: run model on both months to get SMM/CPR forecast
+        with torch.no_grad():
+            pred_t0 = model(x_t0[:n]).numpy()   # [n, 2]  (col 0=CPR, col 1=SMM)
+            pred_t1 = model(x_t1).numpy()       # [n, 2]
+        t0_smm = float(pred_t0[:, 1].mean()) if pred_t0.shape[1] > 1 else float(pred_t0[:, 0].mean())
+        t1_smm = float(pred_t1[:, 1].mean()) if pred_t1.shape[1] > 1 else float(pred_t1[:, 0].mean())
+        t0_cpr = float(pred_t0[:, 0].mean())
+        t1_cpr = float(pred_t1[:, 0].mean())
 
         attributions_normalized[cusip][period_key] = dict(zip(FEATURE_NAMES, attr_np.tolist()))
-        feature_values_original[cusip][period_key] = dict(zip(FEATURE_NAMES, x_t1_orig_mean.tolist()))
+        feature_values_original[cusip][period_key] = {
+            "t0":    dict(zip(FEATURE_NAMES, t0_mean.tolist())),
+            "t1":    dict(zip(FEATURE_NAMES, t1_mean.tolist())),
+            "delta": dict(zip(FEATURE_NAMES, delta_mean.tolist())),
+        }
+        model_predictions[cusip][period_key] = {
+            "t0_smm": t0_smm, "t1_smm": t1_smm, "delta_smm": t1_smm - t0_smm,
+            "t0_cpr": t0_cpr, "t1_cpr": t1_cpr, "delta_cpr": t1_cpr - t0_cpr,
+        }
 
 # ---------------------------------------------------------------------------
 # Summary statistics across all CUSIPs and periods
@@ -178,6 +201,7 @@ result = {
     "analysis_type": "cusip_attribution",
     "attributions_normalized": attributions_normalized,
     "feature_values_original": feature_values_original,
+    "model_predictions": model_predictions,
     "metadata": {
         "n_steps":       N_STEPS,
         "baseline":      BASELINE_STRATEGY,

@@ -62,6 +62,17 @@ def planner_node(state: MBSAnalysisState) -> dict:
     logger.info(f"Discovered checkpoints: {available_checkpoints}")
     logger.info(f"Discovered {len(feature_names)} feature columns from parquet.")
 
+    # Merge focus_cusips from human feedback into the authoritative CUSIP list.
+    # Preserve order: original CUSIPs first, then any newly requested ones.
+    current_cusips: list[str] = list(state.get("cusip_list") or [])
+    if human_fb and human_fb.focus_cusips:
+        existing = set(current_cusips)
+        for c in human_fb.focus_cusips:
+            if c not in existing:
+                current_cusips.append(c)
+                existing.add(c)
+        logger.info(f"Merged focus_cusips into CUSIP list: {current_cusips}")
+
     sys_prompt = T(".prompts:planner.system").r(
         question_type=state["question_type"],
         ig_baseline_strategy=MBS_SETTINGS.ig_baseline_strategy,
@@ -74,7 +85,7 @@ def planner_node(state: MBSAnalysisState) -> dict:
     )
     user_prompt = T(".prompts:planner.user").r(
         question=state["question"],
-        cusip_list=state["cusip_list"],
+        cusip_list=current_cusips,
         scenario_params=state["scenario_params"],
         human_feedback=human_fb,
         iteration=iteration,
@@ -99,6 +110,7 @@ def planner_node(state: MBSAnalysisState) -> dict:
 
     return {
         "analysis_plan": plan.model_dump(),
+        "cusip_list": current_cusips,  # persist merged list for future iterations
         "iteration_count": iteration + 1,
         # Reset all downstream state for the new plan
         "generated_code": "",

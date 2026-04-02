@@ -84,7 +84,10 @@ planner:
 
   user: |-
     Question: {{ question }}
-    Extracted CUSIPs: {{ cusip_list }}
+
+    *** AUTHORITATIVE CUSIP LIST (use ALL of these — do not add or remove any) ***
+    {{ cusip_list | tojson }}
+
     Scenario parameters from question: {{ scenario_params }}
 
     Available model checkpoints (use exactly one of these paths):
@@ -102,8 +105,10 @@ planner:
     - What is wrong    : {{ human_feedback.what_is_wrong }}
     - Suggested change : {{ human_feedback.suggested_change }}
     - Focus CUSIPs     : {{ human_feedback.focus_cusips }}
+      (these have already been merged into the AUTHORITATIVE CUSIP LIST above)
 
     Please revise the plan to address the reviewer's concerns.
+    The CUSIP list above is final — include every CUSIP in data_spec.cusip_list.
     {% endif %}
 
 code_generator:
@@ -178,17 +183,40 @@ reporter:
 
     You will be given:
     - The original analyst question
+    - Model predictions: the model's SMM/CPR forecast for each CUSIP and period (T0 and T1,
+      or base and scenario). Report these prominently — e.g., "The model's SMM forecast
+      moved from 0.0123 (Jan) to 0.0145 (Feb), a Δ of +0.0022."
     - Attribution values (IG output): how much each feature contributed to the SMM/CPR change.
       These are in model-output units (e.g., 0.001 means the feature contributed +0.001 SMM).
-    - Feature values in ORIGINAL scale (e.g., WALA: 120.3 months) — these show WHAT the feature
-      level was, not how much it contributed. Use these for context only.
+    - Feature values in ORIGINAL scale showing how features changed between the two periods:
+        For cusip_attribution  : feature_values_original[cusip][period_key] has keys
+                                   "t0"    — feature values in the earlier month (original scale)
+                                   "t1"    — feature values in the later month (original scale)
+                                   "delta" — t1 - t0 (the change)
+        For scenario_comparison: feature_values_original[cusip][scenario] has keys
+                                   "base"     — base scenario feature values
+                                   "scenario" — stress scenario feature values
+                                   "delta"    — scenario - base (the change)
+      Use these for context only — they explain WHAT changed in the loan pool, not the attribution.
     - Summary statistics and metadata.
 
+    IMPORTANT RULES:
+    - The Feature Change Summary table is already sorted by |Mean Attribution| descending
+      (Rank 1 = most important). Use this rank order when listing top features.
+      DO NOT re-rank features based on feature delta size.
+    - The Model Predictions table has an "ALL CUSIPs (mean)" aggregate row at the top.
+      Use those aggregate numbers in the first paragraph — do NOT cite an individual CUSIP
+      as if it represents the whole portfolio.
+    - For every feature you discuss, report BOTH endpoints and the delta:
+      "WALA moved from 120.3 → 121.3 months (Δ+1.0)" — never just one value.
+
     Write a concise, insightful markdown report that:
-    1. Answers the analyst's question directly in the first paragraph
-    2. Identifies the top 3-5 most impactful features. For each, report:
+    1. Opens with the aggregate model forecast change: "Across N CUSIPs, the mean SMM
+       forecast moved from X → Y (Δ+Z)" using the ALL CUSIPs row from the predictions table.
+    2. Identifies the top 3-5 features ranked by |Mean Attribution| (use the Rank column).
+       For each, report:
        - The attribution magnitude (e.g., "+0.0012 SMM contribution")
-       - The original-scale feature level for context (e.g., "at WALA of 120.3 months")
+       - Both endpoints and delta from the Feature Change Summary table
     3. Explains the economic intuition behind the top drivers
     4. Notes any CUSIPs or periods that behaved differently from the group
     5. References the plot filenames where relevant
@@ -205,13 +233,17 @@ reporter:
     ## Analysis Type
     {{ analysis_type }}
 
-    ## Attribution Results (SMM/CPR contribution per feature)
-    {{ attributions_normalized | tojson(indent=2) }}
+    ## Feature Change Summary (original scale — USE THIS as the primary reference)
+    The table below shows how each feature changed between the two periods being compared.
+    Use the Before and After columns (and Δ) when describing how features moved.
+    Do NOT report only one period's value — always cite both endpoints and the delta.
 
-    ## Feature Values in Original Scale (context only)
-    {{ feature_values_original | tojson(indent=2) }}
+    {{ feature_change_table }}
 
-    ## Summary Statistics
+    ## Model Predictions (SMM/CPR forecast for each period)
+    {{ prediction_summary }}
+
+    ## Attribution Summary Statistics (mean ± std contribution per feature)
     {{ summary_stats | tojson(indent=2) }}
 
     ## Metadata

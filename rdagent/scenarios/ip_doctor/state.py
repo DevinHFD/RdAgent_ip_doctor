@@ -56,14 +56,18 @@ class ExecutionResult(BaseModel):
         period_key examples:
           cusip_attribution  : "2024-01->2024-02"
           scenario_comparison: "rate_shock" (scenario name)
-    - feature_values_original: feature values inverse-transformed to original scale for context
-        (e.g. WALA: 120.3 months). Same nested structure as attributions_normalized.
-        Used in plots and reports so readers understand what feature level caused the attribution.
+    - feature_values_original: feature values inverse-transformed to original scale, showing
+        the change between the two periods being compared.
+        Structure: CUSIP -> period_key -> {"t0": {feat: val}, "t1": {feat: val}, "delta": {feat: val}}
+          For cusip_attribution: t0 = earlier month, t1 = later month, delta = t1 - t0
+          For scenario_comparison: "base", "scenario", "delta" keys instead of t0/t1
+        e.g. WALA: {"t0": 120.3, "t1": 121.3, "delta": 1.0} — moved 1 month older
     """
 
     analysis_type: Literal["cusip_attribution", "scenario_comparison"]
     attributions_normalized: dict
     feature_values_original: dict
+    model_predictions: dict = Field(default_factory=dict)  # CUSIP -> period_key -> {"t0_smm", "t1_smm", "delta_smm", ...}
     metadata: dict
     summary_stats: dict  # feature_name -> {"mean_attr": float, "std_attr": float}
 
@@ -95,6 +99,7 @@ class MBSAnalysisState(TypedDict):
     # Report
     report_markdown: str | None
     plot_paths: list[str]
+    pdf_path: str | None  # absolute path to report.pdf (set by reporter_node)
     # Metadata
     iteration_count: int
     session_id: str
