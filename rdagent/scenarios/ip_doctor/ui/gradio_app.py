@@ -486,8 +486,8 @@ def build_ui() -> gr.Blocks:
                 yield _build_updates(*tup)
 
         def _do_open_reject(hist, st):
-            for tup in open_reject_fn(hist, st):
-                yield _build_updates(*tup)
+            # open_reject_fn returns a plain tuple, not a generator
+            yield _build_updates(*open_reject_fn(hist, st))
 
         def _do_submit_reject(w, s, c, hist, st):
             for tup in submit_reject_fn(w, s, c, hist, st):
