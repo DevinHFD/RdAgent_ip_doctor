@@ -317,6 +317,23 @@ MBS_SKIP_HUMAN_REVIEW=false                 # true = auto-approve (CI / batch ru
 
 ## Running the Workflow
 
+### Option A — Chatbot UI (recommended)
+
+Install and launch the Chainlit web UI:
+
+```bash
+pip install chainlit
+chainlit run rdagent/scenarios/ip_doctor/ui/app.py
+# or on a custom port:
+chainlit run rdagent/scenarios/ip_doctor/ui/app.py --port 8000
+```
+
+Open `http://localhost:8000` in your browser. Type your question in the chat box. The UI shows each processing step as a collapsible panel (parse → plan → generate → validate → execute → review → report), an interactive Approve / Reject panel for human review, inline attribution plots, and a downloadable PDF report.
+
+---
+
+### Option B — CLI
+
 ```bash
 # Month-over-month attribution (single CUSIP)
 python -m rdagent.scenarios.ip_doctor.app \
