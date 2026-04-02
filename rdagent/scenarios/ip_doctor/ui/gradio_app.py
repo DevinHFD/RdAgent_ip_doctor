@@ -474,9 +474,23 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=bool(inp_inter)),
             )
 
-        def _wrap(gen_fn, *fn_args):
-            """Wrap a generator function so each yield is passed through _build_updates."""
-            for tup in gen_fn(*fn_args):
+        # Named generator functions — lambdas are NOT detected as generators by
+        # inspect.isgeneratorfunction, which causes Gradio to return an HTML error
+        # page instead of streaming SSE, leading to "unexpected token <" in browser.
+        def _do_submit(msg, hist, st):
+            for tup in submit_fn(msg, hist, st):
+                yield _build_updates(*tup)
+
+        def _do_approve(hist, st):
+            for tup in approve_fn(hist, st):
+                yield _build_updates(*tup)
+
+        def _do_open_reject(hist, st):
+            for tup in open_reject_fn(hist, st):
+                yield _build_updates(*tup)
+
+        def _do_submit_reject(w, s, c, hist, st):
+            for tup in submit_reject_fn(w, s, c, hist, st):
                 yield _build_updates(*tup)
 
         # ── Wire events ──────────────────────────────────────────────────────
@@ -486,31 +500,31 @@ def build_ui() -> gr.Blocks:
         )
 
         send_btn.click(
-            fn=lambda msg, hist, st: _wrap(submit_fn, msg, hist, st),
+            fn=_do_submit,
             inputs=[msg_box, chatbot, state],
             **send_event_kw,
         ).then(fn=lambda: "", outputs=msg_box)
 
         msg_box.submit(
-            fn=lambda msg, hist, st: _wrap(submit_fn, msg, hist, st),
+            fn=_do_submit,
             inputs=[msg_box, chatbot, state],
             **send_event_kw,
         ).then(fn=lambda: "", outputs=msg_box)
 
         approve_btn.click(
-            fn=lambda hist, st: _wrap(approve_fn, hist, st),
+            fn=_do_approve,
             inputs=[chatbot, state],
             **send_event_kw,
         )
 
         reject_btn.click(
-            fn=lambda hist, st: _wrap(open_reject_fn, hist, st),
+            fn=_do_open_reject,
             inputs=[chatbot, state],
             **send_event_kw,
         )
 
         submit_reject_btn.click(
-            fn=lambda w, s, c, hist, st: _wrap(submit_reject_fn, w, s, c, hist, st),
+            fn=_do_submit_reject,
             inputs=[what_wrong_box, suggestion_box, cusips_box, chatbot, state],
             **send_event_kw,
         ).then(
