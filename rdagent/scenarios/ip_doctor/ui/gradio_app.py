@@ -390,6 +390,8 @@ def build_ui() -> gr.Blocks:
             label="Conversation",
             height=560,
             elem_classes=["chatbot-wrap"],
+            render_markdown=True,
+            sanitize_html=False,   # allow <details> HTML for collapsible steps
         )
 
         # ── Human review panel ──────────────────────────────────────────────
