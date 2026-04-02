@@ -16,6 +16,9 @@ An agentic workflow that answers natural language questions about an MBS prepaym
 8. [Data & Model Requirements](#data--model-requirements)
 9. [Configuration Reference](#configuration-reference)
 10. [Running the Workflow](#running-the-workflow)
+    - [Option A — Streamlit Chat UI](#option-a--streamlit-chat-ui)
+    - [Option B — Gradio Chat UI](#option-b--gradio-chat-ui)
+    - [Option C — CLI](#option-c--cli)
 11. [Human Review Interface](#human-review-interface)
 12. [Output Files](#output-files)
 13. [Workflow Internals](#workflow-internals)
@@ -158,9 +161,13 @@ rdagent/scenarios/ip_doctor/
 │   ├── debugger.py
 │   ├── human_reviewer.py                # shows Before/After/Δ feature table + SMM predictions
 │   └── reporter.py                      # plots + LLM narrative + PDF generation
-└── templates/
-    ├── ig_cusip_attribution.py.jinja    # IG script template for month-over-month
-    └── ig_scenario_comparison.py.jinja  # IG script template for scenario comparison
+├── templates/
+│   ├── ig_cusip_attribution.py.jinja    # IG script template for month-over-month
+│   └── ig_scenario_comparison.py.jinja  # IG script template for scenario comparison
+└── ui/
+    ├── __init__.py
+    ├── streamlit_app.py                 # Streamlit chatbot UI  ← recommended
+    └── gradio_app.py                    # Gradio chatbot UI
 ```
 
 ---
@@ -173,6 +180,7 @@ rdagent/scenarios/ip_doctor/
 - Loan-level data in a single Parquet file with `cusip` and `fh_effdt` columns
 - An OpenAI-compatible LLM API key (GPT-4o recommended)
 - System libraries for WeasyPrint PDF rendering (see Setup)
+- `streamlit` for the Streamlit UI, or `gradio` for the Gradio UI (see Running the Workflow)
 
 ---
 
@@ -317,9 +325,51 @@ MBS_SKIP_HUMAN_REVIEW=false                 # true = auto-approve (CI / batch ru
 
 ## Running the Workflow
 
-### Option A — Chatbot UI (recommended)
+### Option A — Streamlit Chat UI
 
-Install and launch the Gradio web UI:
+The Streamlit UI provides a Claude Code–inspired chat experience with live step tracking and a rich review card.
+
+#### Install
+
+```bash
+pip install streamlit
+```
+
+#### Launch
+
+```bash
+# From the repo root
+streamlit run rdagent/scenarios/ip_doctor/ui/streamlit_app.py
+```
+
+Streamlit opens `http://localhost:8501` automatically. To customise the port or run headless on a remote server:
+
+```bash
+streamlit run rdagent/scenarios/ip_doctor/ui/streamlit_app.py \
+    --server.port 8080 --server.headless true
+```
+
+#### UI walkthrough
+
+1. **Type a question** in the chat box at the bottom (or click an example in the sidebar).
+2. **Watch the steps** appear live as each agent node fires — each step is a compact colour-coded pill:
+   - 🔵 Blue ⟳ = currently running
+   - 🟢 Green ✓ = completed
+   - 🔴 Red ✗ = error
+3. **Review card** appears when the executor finishes:
+   - Structured analysis plan (type, CUSIPs, baseline, rationale)
+   - Horizontal bar chart of top feature IG attributions (green = positive, red = negative)
+   - Before / After / Δ table with original-scale feature values
+   - Model SMM prediction table (T0, T1, Δ per CUSIP)
+   - **Approve ✓** button to proceed to the final report
+   - **Reject ✗** option expands a form: *What is wrong?*, *Suggested change*, *Additional CUSIPs to add*
+4. **Final report** renders as formatted markdown with inline attribution plots and a **Download PDF** button.
+
+---
+
+### Option B — Gradio Chat UI
+
+The Gradio UI offers collapsible step panels and inline gallery output.
 
 ```bash
 pip install "gradio>=4.0"
@@ -330,11 +380,11 @@ python rdagent/scenarios/ip_doctor/ui/gradio_app.py --server_port 7861
 python rdagent/scenarios/ip_doctor/ui/gradio_app.py --share
 ```
 
-Open `http://localhost:7860` in your browser. Type your question in the chat box. The UI shows each processing step as a collapsible panel (parse → plan → generate → validate → execute → review → report), ✅ Approve / ❌ Reject buttons for human review with a guided reject form, inline attribution plots, and a downloadable PDF report.
+Open `http://localhost:7860` in your browser.
 
 ---
 
-### Option B — CLI
+### Option C — CLI
 
 ```bash
 # Month-over-month attribution (single CUSIP)
@@ -373,6 +423,16 @@ Session ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ---
 
 ## Human Review Interface
+
+The workflow pauses after every successful IG execution for human review. The experience differs by entry point:
+
+| Entry point | Review experience |
+|-------------|-------------------|
+| **Streamlit UI** | Review card with attribution bar chart, Before/After/Δ table, model-prediction table, and Approve / Reject controls |
+| **Gradio UI** | Dark-panel review block with plan summary and execution summary; Approve / Reject buttons with guided reject form |
+| **CLI** | Plain-text summary printed to stdout; type `approve` or `reject` at the prompt |
+
+### CLI review prompt
 
 When IG execution succeeds the workflow pauses and shows:
 
