@@ -319,16 +319,18 @@ MBS_SKIP_HUMAN_REVIEW=false                 # true = auto-approve (CI / batch ru
 
 ### Option A — Chatbot UI (recommended)
 
-Install and launch the Chainlit web UI:
+Install and launch the Gradio web UI:
 
 ```bash
-pip install chainlit
-chainlit run rdagent/scenarios/ip_doctor/ui/app.py
-# or on a custom port:
-chainlit run rdagent/scenarios/ip_doctor/ui/app.py --port 8000
+pip install "gradio>=4.0"
+python rdagent/scenarios/ip_doctor/ui/gradio_app.py
+# custom port:
+python rdagent/scenarios/ip_doctor/ui/gradio_app.py --server_port 7861
+# public share link (for remote access):
+python rdagent/scenarios/ip_doctor/ui/gradio_app.py --share
 ```
 
-Open `http://localhost:8000` in your browser. Type your question in the chat box. The UI shows each processing step as a collapsible panel (parse → plan → generate → validate → execute → review → report), an interactive Approve / Reject panel for human review, inline attribution plots, and a downloadable PDF report.
+Open `http://localhost:7860` in your browser. Type your question in the chat box. The UI shows each processing step as a collapsible panel (parse → plan → generate → validate → execute → review → report), ✅ Approve / ❌ Reject buttons for human review with a guided reject form, inline attribution plots, and a downloadable PDF report.
 
 ---
 
