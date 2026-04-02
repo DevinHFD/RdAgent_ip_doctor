@@ -1,0 +1,21 @@
+[project]
+# Name shown in the browser tab and header
+name = "IP Doctor"
+
+[features]
+# Allow users to upload files (e.g. parquet data — not used yet)
+multi_modal = false
+# Show intermediate steps (the collapsed node steps)
+unsafe_allow_html = false
+
+[UI]
+# App name shown in sidebar
+name = "IP Doctor"
+# Show the intermediate step panel collapsed by default (matches Claude Code style)
+default_collapse_content = true
+# Theme
+[UI.theme]
+default = "dark"
+
+[meta]
+generated_by = "ip_doctor"
