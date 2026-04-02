@@ -5,7 +5,7 @@ captum
 joblib
 markdown          # markdown → HTML for PDF generation
 weasyprint        # HTML → PDF with embedded images
-gradio>=4.0       # chatbot UI for ip_doctor scenario
+gradio            # chatbot UI for ip_doctor scenario
 
 python-Levenshtein
 scikit-learn

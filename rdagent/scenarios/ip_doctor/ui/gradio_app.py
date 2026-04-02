@@ -1,5 +1,5 @@
 """
-IP Doctor — Gradio chatbot UI
+IP Doctor — Gradio chatbot UI (Gradio 4.x / 5.x / 6.x compatible)
 
 Presents the LangGraph ip_doctor workflow as an interactive chat with:
   • Collapsible intermediate steps (HTML <details> tags, Claude Code style)
@@ -8,7 +8,7 @@ Presents the LangGraph ip_doctor workflow as an interactive chat with:
   • Inline attribution plots + downloadable PDF report
 
 Install:
-    pip install "gradio>=4.0"
+    pip install gradio
 
 Run:
     python rdagent/scenarios/ip_doctor/ui/gradio_app.py
@@ -125,6 +125,18 @@ def _review_html(payload: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# History helpers — Gradio 4.x+ uses {"role": ..., "content": ...} dicts
+# ---------------------------------------------------------------------------
+
+def _add_user(history: list, msg: str) -> list:
+    return history + [{"role": "user", "content": msg}]
+
+
+def _add_bot(history: list, content: str) -> list:
+    return history + [{"role": "assistant", "content": content}]
+
+
+# ---------------------------------------------------------------------------
 # Graph streaming helper — runs graph.stream() in a daemon thread
 # ---------------------------------------------------------------------------
 
@@ -167,9 +179,7 @@ def _run_pass(graph, input_or_cmd, config: dict, history: list):
     """
     for kind, payload in _stream_graph(graph, input_or_cmd, config):
         if kind == "error":
-            history = history + [
-                {"role": "assistant", "content": f"❌ **Workflow error:**\n```\n{payload}\n```"}
-            ]
+            history = _add_bot(history, f"❌ **Workflow error:**\n```\n{payload}\n```")
             yield history, None
             return
 
@@ -180,9 +190,7 @@ def _run_pass(graph, input_or_cmd, config: dict, history: list):
                 yield history, interrupt_payload
                 return
 
-            history = history + [
-                {"role": "assistant", "content": _step_html(node_name, node_out)}
-            ]
+            history = _add_bot(history, _step_html(node_name, node_out))
             yield history, None
 
 
@@ -209,7 +217,7 @@ def _finish(graph, config, history):
     pdf   = pdf if pdf and Path(pdf).exists() else None
     report_md = state.get("report_markdown") or ""
     if report_md:
-        history = history + [{"role": "assistant", "content": report_md}]
+        history = _add_bot(history, report_md)
     return history, plots, pdf
 
 
@@ -230,7 +238,7 @@ def submit_fn(message, history, state):
     config = {"configurable": {"thread_id": session_id}}
     state = {"graph": graph, "config": config}
 
-    history = (history or []) + [{"role": "user", "content": message}]
+    history = _add_user(history or [], message)
     yield history, state, "", False, False, False, None, None, False
 
     initial = _initial_state(message, session_id)
@@ -262,7 +270,7 @@ def approve_fn(history, state):
         yield history, state, "", False, False, False, None, None, True
         return
 
-    history = history + [{"role": "assistant", "content": "✅ **Approved.** Generating report…"}]
+    history = _add_bot(history, "✅ **Approved.** Generating report…")
     yield history, state, "", False, False, False, None, None, False
 
     # May loop through multiple review cycles
@@ -318,8 +326,8 @@ def submit_reject_fn(what_wrong, suggestion, focus_cusips_raw, history, state):
         + (f"<br>Suggestion: _{suggestion}_" if suggestion else "")
         + (f"<br>Adding CUSIPs: `{focus}`" if focus else "")
     )
-    history = history + [{"role": "assistant", "content": fb_summary}]
-    history = history + [{"role": "assistant", "content": "🔄 Revising plan…"}]
+    history = _add_bot(history, fb_summary)
+    history = _add_bot(history, "🔄 Revising plan…")
     yield history, state, "", False, False, False, None, None, False
 
     input_or_cmd = Command(resume=feedback)
@@ -359,23 +367,11 @@ Ask me to explain what drove your prepayment model's forecast change using **Int
 - *Compare base vs rate_shock_100bps for CUSIPs ABC123 and DEF456.*
 """.strip()
 
-OUTPUTS = [
-    "chatbot",       # gr.Chatbot
-    "state",         # gr.State
-    "review_html",   # gr.HTML  — review panel
-    "approve_vis",   # bool     — approve button visible
-    "reject_vis",    # bool     — reject button visible
-    "form_vis",      # bool     — reject form visible
-    "gallery",       # list     — plots
-    "pdf_file",      # str|None — PDF path
-    "input_inter",   # bool     — input interactive
-]
-
 
 def build_ui() -> gr.Blocks:
     with gr.Blocks(
         title=TITLE,
-        theme=gr.themes.Soft(primary_hue="slate", neutral_hue="slate"),
+        theme=gr.themes.Soft(),
         css="""
         .chatbot-wrap { border-radius: 10px; }
         details { margin: 4px 0; }
@@ -388,18 +384,17 @@ def build_ui() -> gr.Blocks:
 
         gr.Markdown(f"# {TITLE}\n{WELCOME}")
 
+        # Gradio 6.x removed the `type` parameter — messages format is now default.
+        # Remove render_markdown / sanitize_html which were also dropped in 6.x.
         chatbot = gr.Chatbot(
             label="Conversation",
-            type="messages",
             height=560,
             show_copy_button=True,
             elem_classes=["chatbot-wrap"],
-            render_markdown=True,
-            sanitize_html=False,   # allow our <details> HTML
         )
 
         # ── Human review panel ──────────────────────────────────────────────
-        with gr.Group(visible=True) as review_group:
+        with gr.Group(visible=True):
             review_html = gr.HTML(value="", visible=False)
 
             with gr.Row(visible=False) as action_row:
@@ -452,32 +447,30 @@ def build_ui() -> gr.Blocks:
         state = gr.State({})
 
         # ── Shared output list ───────────────────────────────────────────────
-        # Every generator yields a 9-tuple matching this list
+        # Every generator yields a 9-tuple; we map to 8 component updates
+        # (appr_vis and rej_vis are both applied to action_row together)
         shared_outputs = [
             chatbot,
             state,
             review_html,
-            action_row,     # visible bool maps to gr.update(visible=...)
-            reject_btn,     # individual reject button visibility (same row)
+            action_row,
             reject_form,
             gallery,
             pdf_file,
             msg_box,
         ]
 
-        # We use a helper to build gr.update dicts from the yielded tuple
         def _build_updates(hist, st, rev_val, appr_vis, rej_vis,
                            form_vis, plots, pdf, inp_inter):
             return (
                 hist,
                 st,
                 gr.update(value=rev_val, visible=bool(rev_val)),
-                gr.update(visible=appr_vis),
-                gr.update(visible=rej_vis),
-                gr.update(visible=form_vis),
+                gr.update(visible=bool(appr_vis or rej_vis)),
+                gr.update(visible=bool(form_vis)),
                 gr.update(value=plots,   visible=bool(plots)),
                 gr.update(value=pdf,     visible=bool(pdf)),
-                gr.update(interactive=inp_inter),
+                gr.update(interactive=bool(inp_inter)),
             )
 
         def _wrap(gen_fn, *fn_args):
