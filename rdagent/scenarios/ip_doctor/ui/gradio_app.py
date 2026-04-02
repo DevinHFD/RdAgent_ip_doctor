@@ -398,11 +398,11 @@ def build_ui() -> gr.Blocks:
         with gr.Group(visible=True):
             review_html = gr.HTML(value="", visible=False)
 
-            with gr.Row(visible=False) as action_row:
+            with gr.Row():
                 approve_btn = gr.Button("✅  Approve — generate report",
-                                        variant="primary", scale=1)
+                                        variant="primary", scale=1, visible=False)
                 reject_btn  = gr.Button("❌  Reject — revise plan",
-                                        variant="stop",    scale=1)
+                                        variant="stop",    scale=1, visible=False)
 
         # ── Reject form ─────────────────────────────────────────────────────
         with gr.Group(visible=False) as reject_form:
@@ -448,14 +448,16 @@ def build_ui() -> gr.Blocks:
         state = gr.State({})
 
         # ── Shared output list ───────────────────────────────────────────────
-        # Every generator yields a 9-tuple; we map to 8 component updates
-        # (appr_vis and rej_vis are both applied to action_row together)
+        # gr.Row / gr.Column are layout-only in Gradio 6.x and cannot be event
+        # outputs. Use individual data/interactive components instead.
+        # The 9-tuple from handlers maps 1-to-1 to these 9 outputs.
         shared_outputs = [
             chatbot,
             state,
             review_html,
-            action_row,
-            reject_form,
+            approve_btn,   # gr.Button — supports visible update
+            reject_btn,    # gr.Button — supports visible update
+            reject_form,   # gr.Group — supports visible update
             gallery,
             pdf_file,
             msg_box,
@@ -467,7 +469,8 @@ def build_ui() -> gr.Blocks:
                 hist,
                 st,
                 gr.update(value=rev_val, visible=bool(rev_val)),
-                gr.update(visible=bool(appr_vis or rej_vis)),
+                gr.update(visible=bool(appr_vis)),
+                gr.update(visible=bool(rej_vis)),
                 gr.update(visible=bool(form_vis)),
                 gr.update(value=plots,   visible=bool(plots)),
                 gr.update(value=pdf,     visible=bool(pdf)),
