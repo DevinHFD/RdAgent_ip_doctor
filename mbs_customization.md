@@ -511,3 +511,26 @@ All 10 priorities have been implemented, smoke-tested, committed, and pushed to 
 | **10** | **Personas** | [personas.py](rdagent/scenarios/mbs_prepayment/personas.py) — 4 personas + PersonaRouter — commit `0f7c051b` |
 
 Each module has a corresponding `@pytest.mark.offline` test file in [tests/](rdagent/scenarios/mbs_prepayment/tests/) and was smoke-tested before commit. The MBS customization stack is now fully in place end-to-end.
+
+---
+
+## Environment Configuration (.env.mbs_prepayment.example)
+
+A comprehensive `.env` template ([.env.mbs_prepayment.example](.env.mbs_prepayment.example)) was generated covering all 14 configuration sections. All MBS-specific variables use the `MBS_` prefix so a future `MBSPrepaymentSettings(ExtendedBaseSettings)` with `env_prefix="MBS_"` can pick them up directly. Default values mirror the existing dataclass defaults in each module, so copying the file verbatim reproduces current behavior.
+
+| Section | Key Variables | Module |
+|---|---|---|
+| 1. Core RD-Agent + LLM backend | `MAX_RETRY`, `OPENAI_API_KEY`, `CHAT_MODEL`, `USE_CHAT_CACHE` | Global RD-Agent |
+| 2. Filesystem layout | `MBS_DATA_DIR`, `MBS_MODEL_CHECKPOINT_DIR`, `MBS_OUTPUT_DIR`, `MBS_MEMORY_PATH`, `MBS_SEARCH_STATE_PATH`, `MBS_CACHE_DIR` | All modules |
+| 3. Data contract | `MBS_TARGET_COLUMN`, `MBS_TARGET_MIN/MAX`, `MBS_CUSIP_COL`, `MBS_DATE_COL`, `MBS_REQUIRED_COLUMNS`, `MBS_FORBIDDEN_COLUMNS`, `MBS_MACRO_LAG_DAYS_MIN` | [scaffold.py](rdagent/scenarios/mbs_prepayment/scaffold.py) |
+| 4. Temporal split | `MBS_TRAIN_END_DATE` (default `2021-12-31`), `MBS_EMBARGO_MONTHS` | [scaffold.py](rdagent/scenarios/mbs_prepayment/scaffold.py) |
+| 5. Evaluation harness | `MBS_COUPON_BUCKETS`, `MBS_REGIME_TRANSITION_DATES`, `MBS_COUPON_COL`, `MBS_RATE_INCENTIVE_COL`, `MBS_WALA_COL` | [evaluation.py](rdagent/scenarios/mbs_prepayment/evaluation.py) |
+| 6. Search strategy | `MBS_IMPROVEMENT_THRESHOLD` (0.05), `MBS_STALL_WINDOW` (3), `MBS_COOLDOWN_DURATION` (2), `MBS_BACKTRACK_TRIGGER` (3) | [search_strategy.py](rdagent/scenarios/mbs_prepayment/search_strategy.py) |
+| 7. Memory packing | `MBS_MEMORY_MAX_FAILURES_SHOWN` (3), `MBS_MEMORY_MAX_PROPERTIES_SHOWN` (5) | [memory.py](rdagent/scenarios/mbs_prepayment/memory.py) |
+| 8. Domain validator | `MBS_VALIDATOR_MIN_RATE_SENSITIVITY_CORR` (0.3), `MBS_VALIDATOR_MAX_TRAINING_SECONDS` (3600) | [orchestration.py](rdagent/scenarios/mbs_prepayment/orchestration.py) |
+| 9. Phase gates | `MBS_GATE_BASELINE_MAX_RMSE` (0.040), `MBS_GATE_RATE_RESPONSE_MIN_MONOTONICITY` (0.7), `MBS_GATE_RATE_RESPONSE_MIN_S_CURVE_R2` (0.6), `MBS_GATE_RATE_RESPONSE_INFLECTION_{MIN,MAX}_BPS` (50/150), `MBS_GATE_DYNAMICS_MAX_WORST_COUPON_RMSE` (0.035), `MBS_GATE_MACRO_REGIME_TRANSITION_RATIO` (2.0), `MBS_PHASE_BUDGET_*` per phase | [orchestration.py](rdagent/scenarios/mbs_prepayment/orchestration.py) |
+| 10. Execution environment | `MBS_STAGE_*_{TIMEOUT_SECONDS,MEMORY_GB,CPU,ALLOW_GPU,MAX_RETRIES}` for all 5 stages; `MBS_DATASET_*` | [execution_env.py](rdagent/scenarios/mbs_prepayment/execution_env.py) |
+| 11. Personas | `MBS_PERSONA_{QUANT_RESEARCHER,ML_ENGINEER,MODEL_VALIDATOR,DATA_ENGINEER}_{MODEL,TEMPERATURE}`, `MBS_PERSONA_ROUTING_OVERRIDES` | [personas.py](rdagent/scenarios/mbs_prepayment/personas.py) |
+| 12. Interpretability | `MBS_INTERPRETABILITY_N_SAMPLES` (500), `MBS_INTERPRETABILITY_BASELINE_STRATEGY` (zero), `MBS_IG_N_STEPS` (50), `MBS_IG_TARGET_OUTPUT` (cpr), `MBS_IG_BATCH_SIZE` (32) | [interpretability.py](rdagent/scenarios/mbs_prepayment/interpretability.py) |
+| 13. Attribution workflow | `MBS_EXECUTION_TIMEOUT_SECONDS` (300), `MBS_MAX_DEBUG_ATTEMPTS` (3), `MBS_MAX_ITERATIONS` (10), `MBS_SKIP_HUMAN_REVIEW` (False) | app.py (LangGraph agent) |
+| 14. Reproducibility | `MBS_RANDOM_SEED` (42), `MBS_LOG_LEVEL` (INFO) | All modules |
