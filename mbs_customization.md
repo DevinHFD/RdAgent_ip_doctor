@@ -490,3 +490,24 @@ The current loop uses a single LLM persona throughout. For MBS, different phases
 | 10 | **Multi-agent** (#10) | Specialized personas per phase | Marginal quality improvement, easy to implement |
 
 The top four (evaluation function, code scaffold, prompts, interpretability loop) are where 80% of the value is. They prevent the system from producing "technically running but economically meaningless" models — which is the primary risk when applying generic ML automation to structured finance.
+
+---
+
+## Implementation Status
+
+All 10 priorities have been implemented, smoke-tested, committed, and pushed to `myfork/main`. Each module lives under `rdagent/scenarios/mbs_prepayment/` and has a corresponding `@pytest.mark.offline` test file under `rdagent/scenarios/mbs_prepayment/tests/`.
+
+| Priority | Commit | Module |
+|---|---|---|
+| 1 | Evaluation | [evaluation.py](rdagent/scenarios/mbs_prepayment/evaluation.py) — multi-dim scorecard w/ per-coupon RMSE |
+| 2 | Scaffold | [scaffold.py](rdagent/scenarios/mbs_prepayment/scaffold.py) — data contract + temporal split |
+| 3 | Prompts | [prompts.yaml](rdagent/scenarios/mbs_prepayment/prompts.yaml) + [prompt_loader.py](rdagent/scenarios/mbs_prepayment/prompt_loader.py) |
+| 4 | Interpretability | [interpretability.py](rdagent/scenarios/mbs_prepayment/interpretability.py) — IG + economic priors |
+| 5 | EDA | [eda.py](rdagent/scenarios/mbs_prepayment/eda.py) — panel profile + structural breaks |
+| 6 | Search strategy | [search_strategy.py](rdagent/scenarios/mbs_prepayment/search_strategy.py) — curriculum gating |
+| 7 | Memory | [memory.py](rdagent/scenarios/mbs_prepayment/memory.py) — phase-aware context |
+| **8** | **Orchestration** | [orchestration.py](rdagent/scenarios/mbs_prepayment/orchestration.py) — phase gates, DomainValidator, HumanReviewPayload — commit `90c987bc` |
+| **9** | **Execution env** | [execution_env.py](rdagent/scenarios/mbs_prepayment/execution_env.py) — ArtifactCache, IncrementalRunner, ComputeBudget — commit `323eed84` |
+| **10** | **Personas** | [personas.py](rdagent/scenarios/mbs_prepayment/personas.py) — 4 personas + PersonaRouter — commit `0f7c051b` |
+
+Each module has a corresponding `@pytest.mark.offline` test file in [tests/](rdagent/scenarios/mbs_prepayment/tests/) and was smoke-tested before commit. The MBS customization stack is now fully in place end-to-end.
