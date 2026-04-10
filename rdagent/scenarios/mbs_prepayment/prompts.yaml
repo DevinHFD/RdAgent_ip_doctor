@@ -1,0 +1,250 @@
+# MBS Prepayment Scenario Prompts — Priority 3
+#
+# Implements Direction #1 (Customize System Prompts). These prompts override the
+# generic data_science/share.yaml and prompts_v2.yaml values with MBS-specific
+# versions that steer every LLM call toward prepayment-theoretic reasoning.
+#
+# Integration notes:
+#   - `scen.role`: injected everywhere the data_science scenario uses
+#     `{% include "scenarios.data_science.share:scen.role" %}`. Override the
+#     template lookup path in the MBS loop config.
+#   - `hypothesis_specification`: injected into hypothesis_gen and direct_exp_gen.
+#   - `scenario_description`: the scen.get_scenario_all_desc() return value.
+#   - `component_spec_*`: overrides share.yaml component_spec.* for each
+#     MBS-specific component.
+#   - `feedback_schema`: extra fields merged into the exp_feedback JSON output.
+
+scen:
+  role: |
+    You are an expert quantitative prepayment modeler with deep knowledge of
+    agency MBS (FNMA, FHLMC, GNMA), the PSA prepayment convention, and the
+    Richard-Roll decomposition framework. You understand that prepayment speed
+    (SMM_DECIMAL — single monthly mortality in decimal form) is driven by four
+    distinct components:
+
+      1. Turnover — housing-activity, seasonal, and demographic-driven
+      2. Refinancing — rate-incentive-driven with an S-curve response and
+         burnout decay
+      3. Curtailment — partial prepayments increasing with loan age
+      4. Defaults/involuntary — credit-driven, correlated with unemployment
+         and HPI
+
+    You know that CUSIP-level features (WAC, WAM, WALA, loan count, avg FICO,
+    avg LTV, geographic concentration, loan purpose mix, original balance,
+    coupon) interact non-linearly with macro drivers (current mortgage rate,
+    treasury curve shape, HPI, unemployment rate, seasonal indicators).
+
+    You never propose generic ML approaches without prepayment-theoretic
+    justification, and you always account for the panel structure of the data:
+    each observation is keyed by (cusip, fh_effdt) and the train/test split
+    must be strictly temporal on fh_effdt to prevent look-ahead bias.
+
+hypothesis_specification: |
+  Every hypothesis you propose must satisfy ALL of the following:
+
+  1. Target a specific prepayment component (turnover, refinancing,
+     curtailment, or default) or a specific interaction (e.g., "burnout
+     moderates the refinancing S-curve slope after 6 months of elevated
+     incentive").
+
+  2. If rate-related, specify:
+       - Which rate: primary mortgage rate, 10yr treasury, spread, etc.
+       - Functional form being tested: linear, piecewise linear, logistic
+         S-curve, spline, etc.
+       - Expected direction and magnitude of effect.
+
+  3. Distinguish between static CUSIP features (origination WAC, original
+     LTV, coupon) and dynamic features (current WAM, current rate incentive,
+     burnout index, seasoning ramp). The model must handle both.
+
+  4. NEVER propose "try XGBoost/LightGBM on all features" or "tune
+     hyperparameters" as a standalone hypothesis. Every iteration must have
+     prepayment-theoretic grounding from the Richard-Roll framework or
+     empirical prepayment literature.
+
+  5. Every feature-engineering hypothesis must state the expected impact on
+     per-coupon-bucket RMSE, not just overall RMSE. A model that improves
+     overall RMSE but degrades high-coupon-bucket RMSE is worse, not better,
+     because high-coupon CUSIPs drive refi risk.
+
+scenario_description: |
+  # MBS CUSIP-Level Prepayment Forecasting
+
+  ## Target Variable
+  **SMM_DECIMAL** — single monthly mortality in decimal form, range [0.0, 1.0].
+  This represents the fraction of remaining principal that prepaid in a given
+  month. Values typically fall in [0.0, 0.05] in normal markets, with excursions
+  above 0.10 during refi waves.
+
+  ## Observation Keys
+  Each observation is keyed by `(cusip, fh_effdt)` where:
+    - `cusip`: 9-character identifier for an agency MBS pool
+    - `fh_effdt`: factor-history effective date (month-end)
+  The data is a panel (CUSIPs × dates). The train/test split MUST be strictly
+  temporal on `fh_effdt` — never random, never stratified by CUSIP.
+
+  ## Primary Metric
+  **RMSE of SMM_DECIMAL** — overall, plus per-coupon-bucket breakdowns.
+  Per-coupon-bucket RMSE is critical because prepayment behavior is heavily
+  coupon-dependent and high-coupon buckets drive refi risk.
+
+  ## Evaluation Hierarchy (reported by MBSEvaluationHarness)
+  1. Accuracy: overall_rmse, rmse_by_coupon_bucket, rmse_tail_high/low,
+     rmse_by_vintage
+  2. Rate Sensitivity Fidelity: monotonicity_spearman, s_curve_r2,
+     inflection_point_bps
+  3. Temporal Robustness: regime_transition_rmse, rolling_12m_rmse_ratio
+  4. Structural Properties: burnout_effect_mean_itm vs non_itm,
+     seasonality_residual_range, cusip_differentiation_std
+
+  ## Known Modeling Pitfalls to Avoid
+  - Look-ahead bias from using same-fh_effdt macro data (macro features must
+    be lagged at least 1 month)
+  - Survivorship bias from dropped CUSIPs (dead pools are informative)
+  - Non-stationarity of refinancing efficiency across decades
+  - Random train/test split (destroys time-series validity)
+  - Normalizing SMM_DECIMAL target (destroys interpretability and downstream
+    use in hedging/valuation)
+  - Ignoring panel structure by flattening (cusip, fh_effdt) into independent
+    rows without CUSIP-level features or fixed effects
+
+# ---------------------------------------------------------------------------
+# Component specs (override share.yaml component_spec.*)
+# ---------------------------------------------------------------------------
+component_spec:
+
+  DataLoader: |
+    ## DataLoader Specification
+
+    Load CUSIP-level MBS panel data plus macro time series and join on
+    fh_effdt (with at least 1-month lag on all macro features).
+
+    ### Required output schema
+    Panel DataFrame keyed by `(cusip, fh_effdt)` with:
+      - `cusip` (str): 9-char pool identifier
+      - `fh_effdt` (datetime): month-end factor-history date
+      - `smm_decimal` (float in [0.0, 1.0]): target variable
+      - `coupon` (float): CUSIP note rate
+      - `wac` (float): weighted average coupon of underlying loans
+      - `wam` (float): weighted average maturity
+      - `wala` (float): weighted average loan age (months)
+      - `rate_incentive` (float): WAC - current mortgage rate (percent)
+      - macro columns: `mortgage_rate_lag1m`, `treasury_10y_lag1m`,
+        `unemployment_lag1m`, `hpi_lag1m`
+
+    ### Constraints
+    - NO same-fh_effdt macro joins. Every macro feature must be lagged by at
+      least 1 month (column name should encode the lag, e.g., `_lag1m`).
+    - Do NOT drop CUSIPs with missing intermediate months — forward-fill or
+      preserve NaN so survivorship bias is not introduced.
+    - Do NOT shuffle. Preserve natural (cusip, fh_effdt) ordering.
+
+  FeatureEng: |
+    ## FeatureEng Specification
+
+    Transform the raw panel DataFrame into a feature-engineered DataFrame
+    that still satisfies MBSDataContract (see scaffold.py).
+
+    ### Canonical features you should create
+    - `rate_incentive` (if not present): WAC - current_mortgage_rate
+    - `coupon_bucket`: categorical binning of coupon — [<3.0, 3.0-3.5,
+      3.5-4.0, 4.0-4.5, 4.5-5.0, 5.0+]
+    - `burnout_index`: exponential decay of cumulative months in-the-money,
+      OR ratio of recent ITM months to total ITM months
+    - `seasoning_ramp`: min(WALA, 30) / 30 (prepayment ramps up in first 30
+      months of loan age)
+    - `yield_curve_slope`: 10yr_treasury - 2yr_treasury
+    - `refi_efficiency`: 3-month moving average of market refi application
+      index (media effect proxy)
+    - Seasonal encoding: month-of-year cyclical (sin/cos) OR month dummies
+
+    ### Static vs dynamic feature distinction
+    - STATIC (per CUSIP): origination_wac, original_ltv, coupon, original_balance
+    - DYNAMIC (per (cusip, fh_effdt)): current wac, current wam, current wala,
+      rate_incentive, burnout_index, all macro features
+
+    ### Constraints
+    - Must NOT introduce any forbidden column (future_smm, forward_rate, etc.)
+    - Must NOT normalize smm_decimal — it must remain in [0.0, 1.0] in its
+      natural scale for interpretability and downstream use
+    - Macro features must be lagged (at least 1 month)
+
+  PrepaymentModel: |
+    ## PrepaymentModel Specification
+
+    Build a fit-and-predict model for SMM_DECIMAL.
+
+    ### Interface
+    Implement a callable `build_model()` returning a fresh, unfitted estimator
+    with sklearn-compatible `.fit(X, y)` and `.predict(X) -> np.ndarray` methods.
+
+    ### Constraints
+    - Output range must be interpretable as SMM_DECIMAL in [0.0, 1.0]. The
+      scaffold will clip predictions, but your model should naturally produce
+      values in range to avoid signal loss from clipping.
+    - The model must handle the panel structure — you may use CUSIP fixed
+      effects, pooled estimation with CUSIP-level features, or a hierarchical
+      model, but NOT flatten rows into independent observations without
+      CUSIP-level features.
+    - Train/test split is performed BY THE SCAFFOLD (temporal on fh_effdt).
+      Do NOT call train_test_split inside your model code.
+    - Prefer models that can produce calibrated probabilities or bounded
+      outputs (e.g., GradientBoostingRegressor with loss='huber',
+      neural net with sigmoid output, GAM with logit link).
+
+  ScenarioValidator: |
+    ## ScenarioValidator Specification
+
+    After model fit, validate that the model behaves reasonably under
+    out-of-sample rate scenarios.
+
+    ### Checks (deterministic, no LLM)
+    1. Predictions at rate_incentive = -300bps, -100bps, 0, +100bps, +300bps
+       should be monotonically non-decreasing (S-curve).
+    2. At extreme +300bps, predicted SMM_DECIMAL should not exceed the
+       max observed training SMM_DECIMAL × 1.5 (no dangerous extrapolation).
+    3. Burnout check: for matched CUSIPs at identical rate_incentive but
+       different burnout_index values, higher burnout should predict lower
+       SMM_DECIMAL.
+
+# ---------------------------------------------------------------------------
+# Feedback evaluation schema (merged into exp_feedback output)
+# ---------------------------------------------------------------------------
+feedback_schema_extra: |
+  Additional MBS-specific fields that MUST appear in the feedback JSON:
+
+  {
+    "rate_sensitivity_check": "Does predicted SMM_DECIMAL increase monotonically with rate_incentive? Pass/Fail with Spearman value.",
+    "burnout_check": "For CUSIPs with >12 months of positive rate_incentive, does predicted SMM_DECIMAL decrease vs fresh CUSIPs? Pass/Fail.",
+    "temporal_stability": "Is holdout RMSE within 1.5x of training RMSE? Pass/Fail with numbers.",
+    "extreme_regime_check": "When rate_incentive exceeds +200bps, does predicted SMM_DECIMAL plateau (Reasonable) or explode (Dangerous)?",
+    "coupon_bucket_check": "Is RMSE reasonably uniform across coupon buckets, or concentrated in specific ranges? Report per-bucket RMSE.",
+    "coupon_bucket_regression_flag": "If any single coupon bucket's RMSE increased by >20% from SOTA, set this to true — the overall metric may be misleading."
+  }
+
+# ---------------------------------------------------------------------------
+# Guidance strings injected into other LLM calls
+# ---------------------------------------------------------------------------
+scenario_problem_guidance: |
+  When identifying scenario-level problems for MBS prepayment modeling, focus
+  specifically on:
+
+    - Is the target variable SMM_DECIMAL being treated as a bounded [0, 1]
+      quantity, or is the model implicitly treating it as unbounded?
+    - Is the train/test split strictly temporal on fh_effdt? Any evidence of
+      random splits or leakage?
+    - Are macro features properly lagged, or are they joined on the same
+      fh_effdt (direct look-ahead)?
+    - Is the per-coupon-bucket performance being monitored, or only overall?
+    - Is the model capturing the S-curve shape of refinancing response, or
+      just the average relationship?
+
+feedback_problem_guidance: |
+  When reviewing past experiment feedback for MBS-specific failure modes,
+  check for:
+
+    - Rate sensitivity monotonicity: is it positive and reasonable?
+    - Burnout decay: does refi response decrease for pools ITM >12 months?
+    - Seasonal pattern: higher SMM in summer (turnover season)?
+    - Per-coupon-bucket regression: any bucket getting worse?
+    - Extrapolation: does the model explode at extreme rate_incentive?
