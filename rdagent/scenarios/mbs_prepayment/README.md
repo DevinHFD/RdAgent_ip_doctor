@@ -69,7 +69,7 @@ Folder contract:
 | `./mbs_data/` | Root for all MBS competitions | `MBSP_DATA_DIR`, `KG_LOCAL_DATA_PATH`, `DS_LOCAL_DATA_PATH` |
 | `./mbs_data/mbs_prepayment/` | This competition's data folder | (derived from `DS_COMPETITION`) |
 | `./mbs_data/mbs_prepayment/description.md` | Task description the DS loop reads | — |
-| `./mbs_data/mbs_prepayment/*.parquet` | CUSIP-level panel data | — |
+| `./mbs_data/mbs_prepayment/tfminput.parquet` | **Single panel file** — all cusips, all months, all features, the `smm_decimal` target | — |
 | `./mbs_models/` | Model checkpoints, scalers | `MBSP_MODEL_CHECKPOINT_DIR` |
 | `./mbs_output/` | Scorecards, plots, reports | `MBSP_OUTPUT_DIR` |
 | `./mbs_output/memory.json` | Phase-aware memory store | `MBSP_MEMORY_PATH` |
@@ -89,9 +89,11 @@ Edit as needed — the DS loop reads this verbatim as the task spec.
 
 ### 4. Drop in the panel data
 
-Place your CUSIP-level parquet files under
-`./mbs_data/mbs_prepayment/`. The files must satisfy the data
-contract in [scaffold.py](scaffold.py):
+This scenario expects a **single parquet file** at
+`./mbs_data/mbs_prepayment/tfminput.parquet` containing the full
+CUSIP-level monthly panel (all cusips, all `fh_effdt` months, all
+feature columns, and the `smm_decimal` target in one file). The file
+must satisfy the data contract in [scaffold.py](scaffold.py):
 
 - Panel key `(cusip, fh_effdt)` — one row per CUSIP per month
 - Target column `smm_decimal` ∈ [0, 1]
@@ -99,6 +101,18 @@ contract in [scaffold.py](scaffold.py):
 - **No** forbidden leakage columns: `future_smm, forward_smm,
   next_month_smm, forward_rate, future_rate_incentive`
 - Macro features lagged ≥ 30 days
+
+The train/test split is performed in-memory on `fh_effdt`
+(`<= 2021-12-31` for train, `> 2021-12-31` for test) — there are no
+separate train/test files. The shipped `description.md` already tells
+the coder how to load and split:
+
+```python
+import pandas as pd
+df = pd.read_parquet("tfminput.parquet")
+train = df[df["fh_effdt"] <= "2021-12-31"]
+test  = df[df["fh_effdt"] >  "2021-12-31"]
+```
 
 ### 5. Configure `.env`
 

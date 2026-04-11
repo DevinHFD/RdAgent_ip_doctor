@@ -30,9 +30,28 @@ respect MBS prepayment theory:
 - **Forbidden features** (future leakage): `future_smm`, `forward_smm`, `next_month_smm`, `forward_rate`, `future_rate_incentive`
 - **Macro features** (unemployment, HPI, treasury curves) must be lagged by ≥ 30 days
 
+### Files
+
+- `tfminput.parquet` — **single file** containing the full CUSIP-level monthly
+  panel. All cusips, all `fh_effdt` months, all features, and the
+  `smm_decimal` target are in this one file. Load with:
+
+  ```python
+  import pandas as pd
+  df = pd.read_parquet("tfminput.parquet")
+  ```
+
+  There are no separate train/test files — split on `fh_effdt` (see below).
+
 ### Train/Test Split
 
-**Temporal split only** — no random shuffle. Training: `fh_effdt <= 2021-12-31`, Test: `fh_effdt > 2021-12-31`.
+**Temporal split only** — no random shuffle. After loading `tfminput.parquet`,
+split in-memory:
+
+```python
+train = df[df["fh_effdt"] <= "2021-12-31"]
+test  = df[df["fh_effdt"] >  "2021-12-31"]
+```
 
 ---
 
@@ -56,4 +75,6 @@ monotonicity with respect to rate_incentive, or regime-transition RMSE is a **RE
 ## Submission Format
 
 Produce a parquet file with columns `(cusip, fh_effdt, smm_decimal_pred)` covering
-every holdout row. Predictions are automatically clipped to `[0, 1]` by the scaffold.
+every holdout row (i.e. every row with `fh_effdt > 2021-12-31` in
+`tfminput.parquet`). Predictions are automatically clipped to `[0, 1]` by the
+scaffold.
