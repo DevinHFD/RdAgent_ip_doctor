@@ -1,0 +1,184 @@
+"""MBS Prepayment scenario class — plugs the Priority 1–10 customizations
+into the RD-Agent data science loop.
+
+This subclasses ``DataScienceScen`` so the existing
+``rdagent.scenarios.data_science.loop.DataScienceRDLoop`` can drive it
+unchanged. The differences from the default ``DataScienceScen``:
+
+    1. No LLM-based competition-description analysis — MBS has a known
+       fixed schema and a known metric (RMSE of SMM_DECIMAL), so we hard-
+       wire these instead of asking GPT to guess them.
+
+    2. Attaches the MBS-specific building blocks (evaluation harness,
+       data contract, temporal splitter, orchestrator, memory, search
+       state, personas router) as attributes of the scenario object so
+       downstream coder / feedback templates can reach them via ``scen``.
+
+    3. Uses ``MBSP_SETTINGS`` (env prefix ``MBSP_``) for MBS-specific
+       knobs, independent of the ``MBS_``-prefixed ip_doctor settings.
+
+To wire this into the DS loop, set in your ``.env``::
+
+    DS_SCEN=rdagent.scenarios.mbs_prepayment.scenario.MBSPrepaymentScen
+    DS_LOCAL_DATA_PATH=./mbs_data
+    KG_LOCAL_DATA_PATH=./mbs_data
+
+Then::
+
+    rdagent data_science --competition mbs_prepayment
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from rdagent.log import rdagent_logger as logger
+from rdagent.scenarios.data_science.scen import DataScienceScen
+
+from .conf import MBSP_SETTINGS
+from .evaluation import MBSEvaluationHarness
+from .memory import MBSMemory
+from .orchestration import DomainValidator, MBSOrchestrator, PhaseGate
+from .personas import PersonaRouter
+from .scaffold import MBSDataContract, MBSTrainTestSplit
+from .search_strategy import MBSSearchState
+
+
+class MBSPrepaymentScen(DataScienceScen):
+    """Data science scenario specialized for MBS CUSIP-level prepayment.
+
+    Parameters
+    ----------
+    competition:
+        Directory name under ``DS_LOCAL_DATA_PATH`` containing
+        ``description.md`` and the parquet panel data. Conventionally
+        ``"mbs_prepayment"``.
+    """
+
+    def __init__(self, competition: str = "mbs_prepayment") -> None:
+        self.competition = competition
+        self.metric_name = "rmse_smm_decimal"
+        self.metric_direction = False  # lower RMSE is better
+        self.metric_direction_guess = False
+        self.timeout_increase_count = 0
+
+        # Hard-code the task profile — no LLM call needed. MBS schema is known.
+        self.task_type = "Regression (panel)"
+        self.data_type = "Monthly CUSIP-level MBS pool panel (parquet)"
+        self.brief_description = (
+            "Forecast SMM_DECIMAL (Single Monthly Mortality, decimal form in "
+            "[0, 1]) for each (cusip, fh_effdt) observation in the holdout "
+            "period, using the Richard-Roll prepayment decomposition "
+            "(turnover + refi S-curve + burnout + curtailment)."
+        )
+        self.dataset_description = (
+            "Panel keyed on (cusip, fh_effdt) with required columns: "
+            f"{MBSP_SETTINGS.required_columns_list()}. Target: "
+            f"{MBSP_SETTINGS.target_column} in "
+            f"[{MBSP_SETTINGS.target_min}, {MBSP_SETTINGS.target_max}]."
+        )
+        self.model_output_channel = 1
+        self.metric_description = (
+            "RMSE of SMM_DECIMAL on a temporal holdout (fh_effdt > "
+            f"{MBSP_SETTINGS.train_end_date}), with per-coupon-bucket RMSE "
+            "reported separately. A model that improves overall RMSE but "
+            "degrades per-coupon uniformity, monotonicity with respect to "
+            "rate_incentive, or regime transition RMSE is a REJECT."
+        )
+        self.submission_specifications = (
+            "Produce a parquet file with columns (cusip, fh_effdt, "
+            "smm_decimal_pred) covering every row of the holdout. "
+            "Predictions must be clipped to [0, 1]."
+        )
+        self.coder_longer_time_limit_required = False
+        self.runner_longer_time_limit_required = False
+
+        # Load description.md if present (used by the prompt templates)
+        self.raw_description = self._load_description_md()
+        self.processed_data_folder_description = ""
+        self.debug_path = str(MBSP_SETTINGS.data_dir / competition)
+
+        # Attach MBS building blocks so downstream coder/feedback can reach them
+        self.mbs_contract = MBSDataContract(
+            required_index=(MBSP_SETTINGS.cusip_col, MBSP_SETTINGS.date_col),
+            required_columns=tuple(MBSP_SETTINGS.required_columns_list()),
+            forbidden_columns=tuple(MBSP_SETTINGS.forbidden_columns_list()),
+            target_column=MBSP_SETTINGS.target_column,
+            target_range=(MBSP_SETTINGS.target_min, MBSP_SETTINGS.target_max),
+            macro_lag_days_min=MBSP_SETTINGS.macro_lag_days_min,
+        )
+        self.mbs_splitter = MBSTrainTestSplit(
+            train_end_date=MBSP_SETTINGS.train_end_date,
+            date_column=MBSP_SETTINGS.date_col,
+            embargo_months=MBSP_SETTINGS.embargo_months,
+        )
+        self.mbs_harness = MBSEvaluationHarness(
+            coupon_buckets=MBSP_SETTINGS.coupon_buckets_list(),
+            regime_transition_dates=MBSP_SETTINGS.regime_transition_dates_list(),
+            coupon_col=MBSP_SETTINGS.coupon_col,
+            rate_incentive_col=MBSP_SETTINGS.rate_incentive_col,
+            fh_effdt_col=MBSP_SETTINGS.date_col,
+            cusip_col=MBSP_SETTINGS.cusip_col,
+            wala_col=MBSP_SETTINGS.wala_col,
+        )
+        self.mbs_memory = MBSMemory(
+            memory_path=MBSP_SETTINGS.memory_path,
+            max_failures_shown=MBSP_SETTINGS.memory_max_failures_shown,
+            max_properties_shown=MBSP_SETTINGS.memory_max_properties_shown,
+        )
+        self.mbs_search_state = MBSSearchState(
+            improvement_threshold=MBSP_SETTINGS.improvement_threshold,
+            stall_window=MBSP_SETTINGS.stall_window,
+            cooldown_duration=MBSP_SETTINGS.cooldown_duration,
+            backtrack_trigger=MBSP_SETTINGS.backtrack_trigger,
+        )
+        self.mbs_validator = DomainValidator(
+            target_min=MBSP_SETTINGS.target_min,
+            target_max=MBSP_SETTINGS.target_max,
+            min_rate_sensitivity_corr=MBSP_SETTINGS.validator_min_rate_sensitivity_corr,
+            max_training_seconds=MBSP_SETTINGS.validator_max_training_seconds,
+        )
+        self.mbs_gate = PhaseGate(
+            baseline_max_rmse=MBSP_SETTINGS.gate_baseline_max_rmse,
+            rate_response_min_monotonicity=MBSP_SETTINGS.gate_rate_response_min_monotonicity,
+            rate_response_min_s_curve_r2=MBSP_SETTINGS.gate_rate_response_min_s_curve_r2,
+            rate_response_inflection_range_bps=(
+                MBSP_SETTINGS.gate_rate_response_inflection_min_bps,
+                MBSP_SETTINGS.gate_rate_response_inflection_max_bps,
+            ),
+            dynamics_max_worst_coupon_rmse=MBSP_SETTINGS.gate_dynamics_max_worst_coupon_rmse,
+            macro_regime_transition_ratio=MBSP_SETTINGS.gate_macro_regime_transition_ratio,
+        )
+        self.mbs_orchestrator = MBSOrchestrator(
+            memory=self.mbs_memory,
+            search_state=self.mbs_search_state,
+            validator=self.mbs_validator,
+            gate=self.mbs_gate,
+        )
+        self.mbs_persona_router = PersonaRouter()
+
+        logger.info(
+            f"MBSPrepaymentScen initialized: competition={competition}, "
+            f"metric={self.metric_name}, train_end={MBSP_SETTINGS.train_end_date}"
+        )
+
+    # ------------------------------------------------------------------
+    # Override LLM-driven helpers with MBS static descriptions
+    # ------------------------------------------------------------------
+
+    def reanalyze_competition_description(self) -> None:
+        """MBS schema is fixed — nothing to reanalyze."""
+        logger.info("MBSPrepaymentScen: reanalyze_competition_description is a no-op.")
+
+    def _load_description_md(self) -> str:
+        """Load description.md from the MBS data folder if it exists."""
+        desc_path = MBSP_SETTINGS.data_dir / self.competition / "description.md"
+        if desc_path.exists():
+            return desc_path.read_text()
+        return (
+            "# MBS CUSIP-level Prepayment Forecasting\n\n"
+            "Target: SMM_DECIMAL in [0, 1] on a (cusip, fh_effdt) panel. "
+            "Temporal split at "
+            f"{MBSP_SETTINGS.train_end_date}. Metric: RMSE of SMM_DECIMAL, "
+            "with per-coupon-bucket breakdown and rate-sensitivity "
+            "monotonicity checks. See scorecard from MBSEvaluationHarness."
+        )
