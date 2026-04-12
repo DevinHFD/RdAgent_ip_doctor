@@ -267,4 +267,16 @@ def run_scaffold_pipeline(
         features=result["features_test"],
     )
     write_scorecard(scorecard, str(output_dir / "scores.json"))
+
+    # Bridge: write scores.csv so the DS runner can consume the primary metric.
+    # The DS runner expects a CSV with model names as index and the metric name
+    # as column.  We write the overall_rmse as the "ensemble" row.
+    primary_value = scorecard.get("primary_metric", {}).get("value", float("nan"))
+    metric_name = scorecard.get("primary_metric", {}).get("name", "rmse_smm_decimal")
+    scores_csv_path = output_dir / "scores.csv"
+    pd.DataFrame(
+        {metric_name: [primary_value]},
+        index=pd.Index(["ensemble"], name=""),
+    ).to_csv(scores_csv_path)
+
     return {"result": result, "scorecard": scorecard}

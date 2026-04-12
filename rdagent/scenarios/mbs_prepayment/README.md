@@ -139,18 +139,24 @@ the template for the full list with defaults.
 ### 6. Run the scenario
 
 ```bash
-rdagent data_science --competition mbs_prepayment
+rdagent mbs_prepayment --competition mbs_prepayment
 ```
 
-This invokes `DataScienceRDLoop` with `MBSPrepaymentScen` as the
-scenario. The loop will:
+This invokes `MBSPrepaymentRDLoop` (a subclass of `DataScienceRDLoop`)
+with `MBSPrepaymentScen` as the scenario. The loop will:
 
 1. Read `description.md` from the competition folder
 2. Instantiate `MBSPrepaymentScen`, attaching all ten Priority modules
-3. Run the proposal → codegen → execution → feedback loop, with the
-   MBS evaluation harness scoring each iteration and `PhaseGate` /
-   `DomainValidator` rejecting models that degrade per-coupon
-   uniformity or rate-sensitivity monotonicity
+3. Run the proposal → codegen → execution → feedback → record loop, with
+   MBS memory/search/phase context injected into every LLM call,
+   `DomainValidator` auto-rejecting degenerate experiments, the
+   `MODEL_VALIDATOR` persona driving feedback, and phase gates
+   auto-advancing when criteria are met
+
+> The old `rdagent data_science --competition mbs_prepayment` invocation
+> still works but runs the generic DS loop — only scenario metadata is
+> MBS-aware, none of the Priority 6–10 modules are invoked at runtime.
+> Use `rdagent mbs_prepayment` for the fully wired loop.
 
 ### 7. View logs
 
@@ -213,12 +219,175 @@ changes required.
 
 ---
 
+## Runtime wiring (Priority 1–10 integration fix)
+
+Earlier versions of this scenario attached all ten Priority modules to
+`MBSPrepaymentScen` but relied on the stock `DataScienceRDLoop` to drive
+the loop. That left the modules **defined but never invoked** at
+runtime: the DS runner expected scalar `scores.csv`, not the MBS
+multi-dimensional scorecard; MBS personas, memory, search state, phase
+gates, and domain validator were never called during the proposal →
+codegen → execution → feedback → record chain.
+
+The following five changes wire the modules directly into the live loop:
+
+| # | File | Role |
+|---|---|---|
+| 1 | [scaffold.py](scaffold.py) | `run_scaffold_pipeline()` now writes **both** `scores.json` (MBS scorecard) and `scores.csv` (primary-metric bridge for the DS runner). |
+| 2 | [scenario.py](scenario.py) | `get_scenario_all_desc()` override injects current phase + gate criteria, search-strategy constraints, MBS memory, and the data contract into **every** downstream LLM prompt. |
+| 3 | [feedback.py](feedback.py) | New `MBSExperiment2Feedback(DSExperiment2Feedback)` — prepends the `MODEL_VALIDATOR` persona to the feedback system prompt and appends the `scores.json` scorecard + feedback-phase memory to the user prompt. |
+| 4 | [loop.py](loop.py) | New `MBSPrepaymentRDLoop(DataScienceRDLoop)` — overrides `feedback()` to run `DomainValidator` as an auto-reject gate (no LLM call on obvious rejects) and overrides `record()` to update `MBSMemory`, `MBSSearchState`, and evaluate/advance `PhaseGate`. |
+| 5 | [../../app/mbs_prepayment/loop.py](../../app/mbs_prepayment/loop.py) + [../../app/cli.py](../../app/cli.py) | New `rdagent mbs_prepayment` CLI command that instantiates `MBSPrepaymentRDLoop` instead of the generic `DataScienceRDLoop`. |
+
+### Modules: before vs. after
+
+| Module | Before | After |
+|---|---|---|
+| `scenario.py` (static descriptions) | Active | Active |
+| `evaluation.py` (`MBSEvaluationHarness`) | Defined, not consumed | **Active** — scorecard read by feedback + record |
+| `memory.py` (`MBSMemory`) | Defined, not consumed | **Active** — updated on record, injected into all prompts |
+| `search_strategy.py` (curriculum/cooldown) | Defined, not consumed | **Active** — constraints injected into all prompts |
+| `orchestration.py` (`DomainValidator`, `PhaseGate`, `MBSOrchestrator`) | Defined, not consumed | **Active** — validator auto-rejects; gates auto-advance |
+| `personas.py` (`MODEL_VALIDATOR`) | Defined, not consumed | **Active** — system prompt for feedback LLM |
+| `scaffold.py` (`MBSDataContract`, `MBSTrainTestSplit`) | Defined, partially used | Data contract injected into prompts; `scores.csv` bridge added |
+| `prompt_loader.py` / `prompts.yaml` | Defined, not consumed | Still not directly in the proposal path |
+| `execution_env.py` (`IncrementalRunner`, `ArtifactCache`) | Defined, not consumed | Still not in the runner path |
+
+### New calling chain
+
+```
+rdagent mbs_prepayment
+  └── rdagent/app/mbs_prepayment/loop.py :: main()
+        └── MBSPrepaymentRDLoop(DS_RD_SETTING)          # loop.py (this folder)
+              ├── __init__:   swap summarizer → MBSExperiment2Feedback (feedback.py)
+              ├── direct_exp_gen / coding / running     # inherited from DataScienceRDLoop
+              │     └── every LLM call reads scen.get_scenario_all_desc()
+              │           → injects phase + search constraints + MBS memory + data contract
+              ├── feedback:   DomainValidator auto-reject  →  MODEL_VALIDATOR-led LLM feedback
+              └── record:     MBSMemory.append_entry()
+                              MBSSearchState.append()
+                              MBSOrchestrator.evaluate_gate() → advance_phase()
+```
+
+---
+
+## Summary of Changes
+
+### Problem
+
+The generic `DataScienceRDLoop` drove everything. MBS modules
+(`MBSEvaluationHarness`, `MBSMemory`, `MBSSearchState`,
+`MBSOrchestrator`, `DomainValidator`, `PhaseGate`, `PersonaRouter`) were
+instantiated on the scenario object but **never called** during the
+live runtime chain:
+
+- DS runner expected scalar `scores.csv`; MBS harness only wrote rich
+  `scores.json` → runner couldn't consume it.
+- Feedback used the generic DS summarizer; MBS personas never loaded.
+- No phase gating, no domain validation, no memory updates — each loop
+  iteration was stateless from MBS's perspective.
+- The `get_scenario_all_desc()` inherited from `DataScienceScen`
+  omitted MBS phase/search/memory context from downstream LLM prompts.
+
+### Change 1 — `scores.json` → `scores.csv` bridge
+
+File: [scaffold.py](scaffold.py) — `run_scaffold_pipeline()`
+
+```python
+# Bridge: write scores.csv so the DS runner can consume the primary metric.
+primary_value = scorecard.get("primary_metric", {}).get("value", float("nan"))
+metric_name   = scorecard.get("primary_metric", {}).get("name", "rmse_smm_decimal")
+pd.DataFrame(
+    {metric_name: [primary_value]},
+    index=pd.Index(["ensemble"], name=""),
+).to_csv(output_dir / "scores.csv")
+```
+
+Both files are now written: `scores.json` (full MBS scorecard, consumed
+by feedback + record) and `scores.csv` (scalar metric, consumed by the
+DS runner's `DSRunnerEvaluator`).
+
+### Change 2 — `get_scenario_all_desc()` override
+
+File: [scenario.py](scenario.py) — `MBSPrepaymentScen`
+
+Every downstream LLM call (proposal, coding, feedback) reads
+`scen.get_scenario_all_desc()`. The override appends four MBS sections
+to the base DS description on every call:
+
+1. **Current phase + gate criteria** — from `mbs_orchestrator.phase_spec()`
+2. **Search-strategy constraints** — from `mbs_orchestrator.iteration_constraints()` via `format_filter_for_prompt()`
+3. **MBS memory context** — `mbs_memory.render_context(IterationPhase.HYPOTHESIS_GEN)`
+4. **Data contract reminder** — target, forbidden leakage columns,
+   required features
+
+Single injection point → all LLM stages become phase-aware without
+modifying DS templates.
+
+### Change 3 — `MBSExperiment2Feedback`
+
+File: [feedback.py](feedback.py) (new) — subclass of
+`DSExperiment2Feedback`
+
+- Prepends `MODEL_VALIDATOR.system_prompt` to the feedback system
+  prompt.
+- Reads `scores.json` from `exp.experiment_workspace.file_dict` and
+  appends it (JSON-fenced) to the user prompt, with a directive that
+  an experiment improving overall RMSE but degrading per-coupon
+  uniformity / regime robustness / monotonicity is a REJECT.
+- Appends `mbs_memory.render_context(IterationPhase.FEEDBACK)` to the
+  user prompt.
+
+### Change 4 — `MBSPrepaymentRDLoop`
+
+File: [loop.py](loop.py) (new) — subclass of `DataScienceRDLoop`
+
+- `__init__`: validates the scenario is MBS-compatible (has
+  `mbs_orchestrator`); replaces `self.summarizer` with
+  `MBSExperiment2Feedback`.
+- `feedback()`: reads scorecard via `_read_scorecard()`, runs
+  `DomainValidator` via `_domain_validate()`. If validation fails the
+  experiment is **auto-rejected with no LLM call** (saves a round
+  trip); otherwise falls through to the persona-led LLM feedback.
+- `record()`: after the base record logic:
+  - `_update_memory()` — appends a `TraceEntry` (with
+    `ModelProperties.from_scorecard()` on success) to `MBSMemory`.
+  - `_update_search_state()` — appends an `IterationRecord` to
+    `MBSSearchState` (curriculum / cooldown / exploration mode).
+  - `mbs_orchestrator.evaluate_gate()` — if passed, calls
+    `advance_phase()` and logs the transition.
+
+### Change 5 — CLI command + app entry point
+
+Files:
+- [../../app/mbs_prepayment/__init__.py](../../app/mbs_prepayment/__init__.py) (new, empty)
+- [../../app/mbs_prepayment/loop.py](../../app/mbs_prepayment/loop.py) (new) — `main()` instantiates `MBSPrepaymentRDLoop(DS_RD_SETTING)` (not `DataScienceRDLoop`)
+- [../../app/cli.py](../../app/cli.py) — new `@app.command(name="mbs_prepayment")` registering the CLI
+
+Invocation:
+
+```bash
+rdagent mbs_prepayment --competition mbs_prepayment
+```
+
+### Verification
+
+- 91 tests pass (one pre-existing unrelated failure in
+  `test_cache_stats_and_clear` excluded).
+- `rdagent mbs_prepayment --help` registers and parses the expected
+  flags (`--path`, `--checkout/--no-checkout`, `--step-n`, `--loop-n`,
+  `--timeout`, `--competition`).
+
+---
+
 ## Files in this folder
 
 | File | Role |
 |---|---|
 | [conf.py](conf.py) | `MBSPrepaymentSettings` + module-level `MBSP_SETTINGS` |
 | [scenario.py](scenario.py) | `MBSPrepaymentScen(DataScienceScen)` — DS loop entry |
+| [loop.py](loop.py) | `MBSPrepaymentRDLoop(DataScienceRDLoop)` — wires MBS modules into the live loop |
+| [feedback.py](feedback.py) | `MBSExperiment2Feedback` — persona + scorecard + memory-aware feedback |
 | [scaffold.py](scaffold.py) | `MBSDataContract`, `MBSTrainTestSplit` (Priority 2) |
 | [evaluation.py](evaluation.py) | `MBSEvaluationHarness` scorecard (Priority 1) |
 | [interpretability.py](interpretability.py) | Integrated Gradients attribution (Priority 4) |

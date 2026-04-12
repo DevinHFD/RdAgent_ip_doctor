@@ -23,6 +23,7 @@ from typing_extensions import Annotated
 
 from rdagent.app.data_science.loop import main as data_science
 from rdagent.app.finetune.llm.loop import main as llm_finetune
+from rdagent.app.mbs_prepayment.loop import main as mbs_prepayment
 from rdagent.app.general_model.general_model import (
     extract_models_and_implement as general_model,
 )
@@ -137,6 +138,25 @@ def data_science_cli(
     competition: Optional[str] = None,
 ):
     data_science(
+        path=path,
+        checkout=checkout,
+        step_n=step_n,
+        loop_n=loop_n,
+        timeout=timeout,
+        competition=competition,
+    )
+
+
+@app.command(name="mbs_prepayment")
+def mbs_prepayment_cli(
+    path: Optional[str] = None,
+    checkout: CheckoutOption = True,
+    step_n: Optional[int] = None,
+    loop_n: Optional[int] = None,
+    timeout: Optional[str] = None,
+    competition: str = "mbs_prepayment",
+):
+    mbs_prepayment(
         path=path,
         checkout=checkout,
         step_n=step_n,

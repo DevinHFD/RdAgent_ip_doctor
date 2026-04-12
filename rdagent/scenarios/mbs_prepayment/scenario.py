@@ -31,16 +31,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rdagent.app.data_science.conf import DS_RD_SETTING
 from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.data_science.scen import DataScienceScen
 
 from .conf import MBSP_SETTINGS
 from .evaluation import MBSEvaluationHarness
-from .memory import MBSMemory
+from .memory import IterationPhase, MBSMemory
 from .orchestration import DomainValidator, MBSOrchestrator, PhaseGate
 from .personas import PersonaRouter
 from .scaffold import MBSDataContract, MBSTrainTestSplit
-from .search_strategy import MBSSearchState
+from .search_strategy import MBSSearchState, format_filter_for_prompt
 
 
 class MBSPrepaymentScen(DataScienceScen):
@@ -168,6 +169,49 @@ class MBSPrepaymentScen(DataScienceScen):
     def reanalyze_competition_description(self) -> None:
         """MBS schema is fixed — nothing to reanalyze."""
         logger.info("MBSPrepaymentScen: reanalyze_competition_description is a no-op.")
+
+    def get_scenario_all_desc(self, eda_output=None) -> str:
+        """Extend the base DS scenario description with MBS-specific context.
+
+        Every LLM call in the loop (proposal, coding, runner eval, feedback)
+        reads this description.  By appending MBS memory, search strategy
+        constraints, and phase info here, all calls become MBS-aware without
+        modifying any shared DS code.
+        """
+        base = super().get_scenario_all_desc(eda_output=eda_output)
+
+        sections: list[str] = []
+
+        # 1) Current phase and gate criteria
+        spec = self.mbs_orchestrator.phase_spec()
+        sections.append(
+            f"## MBS Phase: {spec.phase.value}\n"
+            f"**Goal**: {spec.goal}\n"
+            f"**Gate criteria**: {spec.gate_criteria_description}\n"
+            f"**Allowed components**: {', '.join(spec.allowed_components)}"
+        )
+
+        # 2) Search strategy constraints (curriculum filter)
+        constraints = self.mbs_orchestrator.iteration_constraints()
+        sections.append(format_filter_for_prompt(constraints))
+
+        # 3) MBS memory context (best experiments, recent failures, trends)
+        memory_ctx = self.mbs_memory.render_context(IterationPhase.HYPOTHESIS_GEN)
+        if memory_ctx:
+            sections.append(memory_ctx)
+
+        # 4) Data contract reminder
+        sections.append(
+            "## MBS Data Contract\n"
+            f"- Required index: {self.mbs_contract.required_index}\n"
+            f"- Required columns: {self.mbs_contract.required_columns}\n"
+            f"- Forbidden (future-leaking) columns: {self.mbs_contract.forbidden_columns}\n"
+            f"- Target: {self.mbs_contract.target_column} in "
+            f"[{self.mbs_contract.target_range[0]}, {self.mbs_contract.target_range[1]}]\n"
+            f"- Temporal split at {self.mbs_splitter.train_end_date} on {self.mbs_splitter.date_column}"
+        )
+
+        return base + "\n\n" + "\n\n".join(sections)
 
     def _load_description_md(self) -> str:
         """Load description.md from the MBS data folder if it exists."""
