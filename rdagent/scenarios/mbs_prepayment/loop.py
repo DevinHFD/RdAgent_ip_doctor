@@ -163,9 +163,26 @@ class MBSPrepaymentRDLoop(DataScienceRDLoop):
     # ------------------------------------------------------------------
 
     def _read_scorecard(self, exp: DSExperiment) -> dict[str, Any] | None:
-        """Read ``scores.json`` from the experiment workspace if present."""
+        """Read ``scores.json`` from the experiment workspace.
+
+        The DS runner only loads ``scores.csv`` back into the experiment
+        object; ``scores.json`` is written by the MBS scaffold to disk but
+        is not re-injected into ``file_dict``.  We therefore read it
+        directly from ``workspace_path`` (with a ``file_dict`` fallback in
+        case a future code path does inject it).
+        """
         if exp is None or exp.experiment_workspace is None:
             return None
+        # Primary: read from disk (where the scaffold wrote it).
+        ws_path = getattr(exp.experiment_workspace, "workspace_path", None)
+        if ws_path is not None:
+            scores_fp = ws_path / "scores.json"
+            if scores_fp.exists():
+                try:
+                    return json.loads(scores_fp.read_text())
+                except (json.JSONDecodeError, OSError):
+                    logger.warning("MBSPrepaymentRDLoop: could not parse scores.json on disk")
+        # Fallback: file_dict (older code paths / cached runs).
         raw = exp.experiment_workspace.file_dict.get("scores.json")
         if not raw:
             return None

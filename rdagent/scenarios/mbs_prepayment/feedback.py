@@ -67,23 +67,36 @@ class MBSExperiment2Feedback(DSExperiment2Feedback):
 
         # --- MBS-specific additions ---
 
-        # 1) Read MBS scorecard from workspace (written by scaffold)
+        # 1) Read MBS scorecard from workspace (written by scaffold).
+        # The DS runner does not re-inject scores.json into file_dict, so we
+        # read it directly from the workspace path (with a file_dict fallback).
         mbs_scorecard_text = ""
-        scorecard_raw = exp.experiment_workspace.file_dict.get("scores.json", None)
-        if scorecard_raw:
-            try:
-                scorecard = json.loads(scorecard_raw) if isinstance(scorecard_raw, str) else scorecard_raw
-                mbs_scorecard_text = (
-                    "\n\n## MBS Evaluation Scorecard (from MBSEvaluationHarness)\n"
-                    "```json\n"
-                    f"{json.dumps(scorecard, indent=2, default=str)}\n"
-                    "```\n"
-                    "Use this multi-dimensional scorecard to assess the experiment. "
-                    "An experiment that improves overall RMSE but degrades per-coupon "
-                    "RMSE uniformity, regime robustness, or monotonicity is a REJECT."
-                )
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("MBSExperiment2Feedback: could not parse scores.json")
+        scorecard = None
+        ws_path = getattr(exp.experiment_workspace, "workspace_path", None)
+        if ws_path is not None:
+            scores_fp = ws_path / "scores.json"
+            if scores_fp.exists():
+                try:
+                    scorecard = json.loads(scores_fp.read_text())
+                except (json.JSONDecodeError, OSError):
+                    logger.warning("MBSExperiment2Feedback: could not parse scores.json on disk")
+        if scorecard is None:
+            scorecard_raw = exp.experiment_workspace.file_dict.get("scores.json", None)
+            if scorecard_raw:
+                try:
+                    scorecard = json.loads(scorecard_raw) if isinstance(scorecard_raw, str) else scorecard_raw
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("MBSExperiment2Feedback: could not parse scores.json")
+        if scorecard:
+            mbs_scorecard_text = (
+                "\n\n## MBS Evaluation Scorecard (from MBSEvaluationHarness)\n"
+                "```json\n"
+                f"{json.dumps(scorecard, indent=2, default=str)}\n"
+                "```\n"
+                "Use this multi-dimensional scorecard to assess the experiment. "
+                "An experiment that improves overall RMSE but degrades per-coupon "
+                "RMSE uniformity, regime robustness, or monotonicity is a REJECT."
+            )
 
         # 2) MBS memory: feedback-phase context
         mbs_memory_text = ""
