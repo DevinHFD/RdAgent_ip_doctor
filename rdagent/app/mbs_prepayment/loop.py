@@ -68,6 +68,18 @@ def main(
     if not DS_RD_SETTING.competition:
         logger.error("Please specify competition name.")
 
+    # Force the MBS scenario class regardless of whatever DS_SCEN may be set
+    # to in the environment. The dedicated ``rdagent mbs_prepayment`` command
+    # must be self-contained: MBSPrepaymentRDLoop.__init__ requires a scen
+    # with ``mbs_orchestrator`` and will fail hard otherwise.
+    mbs_scen_path = "rdagent.scenarios.mbs_prepayment.scenario.MBSPrepaymentScen"
+    if DS_RD_SETTING.scen != mbs_scen_path:
+        logger.info(
+            f"mbs_prepayment: overriding DS_SCEN ({DS_RD_SETTING.scen}) "
+            f"→ {mbs_scen_path}"
+        )
+        DS_RD_SETTING.scen = mbs_scen_path
+
     if path is None:
         mbs_loop = MBSPrepaymentRDLoop(DS_RD_SETTING)
     else:
