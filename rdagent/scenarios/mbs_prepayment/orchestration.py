@@ -322,6 +322,82 @@ class DomainValidator:
         )
         return ValidationReport(checks=checks, ok=all_ok, auto_reject_reason=reason)
 
+    def validate_from_scorecard(self, scorecard: dict[str, Any]) -> ValidationReport:
+        """Validate using precomputed scorecard fields (no raw y_pred needed).
+
+        The DS runner does not surface raw predictions back to the loop, but
+        the MBS scaffold has already written the aggregate diagnostics to
+        ``scores.json``. This method inspects those diagnostics directly so
+        the auto-reject gate actually fires on real failure modes instead of
+        a placeholder payload.
+
+        Fires on:
+          * NaN/missing ``overall_rmse`` or RMSE outside a plausible range
+          * Non-monotonic rate sensitivity (Spearman below threshold)
+          * Any harness dimension that returned an ``_error`` field
+        """
+        checks: list[ValidationCheck] = []
+
+        acc = scorecard.get("accuracy", {}) or {}
+        rs = scorecard.get("rate_sensitivity", {}) or {}
+
+        # Check 1: overall_rmse finite and plausible (0, 1].
+        overall = acc.get("overall_rmse", float("nan"))
+        rmse_ok = _is_finite(overall) and 0.0 < float(overall) <= 1.0
+        checks.append(
+            ValidationCheck(
+                name="overall_rmse_finite",
+                passed=rmse_ok,
+                detail=(
+                    f"overall_rmse={overall}"
+                    if rmse_ok
+                    else f"overall_rmse={overall} — NaN or outside (0, 1]; "
+                    "check for empty test split, all-NaN predictions, or unclipped output"
+                ),
+            )
+        )
+
+        # Check 2: monotonic rate sensitivity (if the harness computed it).
+        if "monotonicity_spearman" in rs and "_error" not in rs:
+            corr = rs.get("monotonicity_spearman", 0.0)
+            mono_ok = _is_finite(corr) and float(corr) >= self.min_rate_sensitivity_corr
+            checks.append(
+                ValidationCheck(
+                    name="rate_sensitivity_monotonic",
+                    passed=mono_ok,
+                    detail=(
+                        f"spearman(pred, rate_incentive)={float(corr):+.3f} "
+                        f"(threshold {self.min_rate_sensitivity_corr:+.2f})"
+                    ),
+                )
+            )
+
+        # Check 3: no harness dimension errored out.
+        errored_dims = [
+            dim for dim, vals in scorecard.items()
+            if isinstance(vals, dict) and "_error" in vals
+        ]
+        checks.append(
+            ValidationCheck(
+                name="harness_dimensions_ok",
+                passed=not errored_dims,
+                detail=(
+                    "all scorecard dimensions produced results"
+                    if not errored_dims
+                    else f"dimensions with errors: {', '.join(errored_dims)}"
+                ),
+            )
+        )
+
+        all_ok = all(c.passed for c in checks)
+        reason = (
+            ""
+            if all_ok
+            else "Domain validation failed (scorecard-driven): "
+            + "; ".join(c.detail for c in checks if not c.passed)
+        )
+        return ValidationReport(checks=checks, ok=all_ok, auto_reject_reason=reason)
+
 
 def _is_nan(x: float) -> bool:
     try:

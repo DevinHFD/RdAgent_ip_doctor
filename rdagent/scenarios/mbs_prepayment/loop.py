@@ -193,20 +193,16 @@ class MBSPrepaymentRDLoop(DataScienceRDLoop):
             return None
 
     def _domain_validate(self, scorecard: dict[str, Any]) -> ValidationReport:
-        """Run the deterministic DomainValidator using scorecard data."""
-        acc = scorecard.get("accuracy", {})
-        rs = scorecard.get("rate_sensitivity", {})
+        """Run the deterministic DomainValidator using scorecard fields.
 
-        # Extract predictions-level stats from scorecard
-        # (we don't have raw y_pred, but we can check key metrics)
-        overall_rmse = acc.get("overall_rmse", float("nan"))
-        monotonicity = rs.get("monotonicity_spearman", 0.0)
-
-        # Use the validator for what we can check from the scorecard
-        return self.mbs_scen.mbs_validator.validate(
-            y_pred=[0.5],  # placeholder — real check is via scorecard
-            rate_incentive=None,
-        )
+        The raw ``y_pred`` / ``rate_incentive`` arrays are not available on
+        the DS experiment object, but the MBS scaffold has already written
+        aggregate diagnostics (overall_rmse, spearman monotonicity, per-
+        dimension errors) to ``scores.json`` via ``MBSEvaluationHarness``.
+        ``validate_from_scorecard`` inspects those directly, so the auto-
+        reject gate fires on real failure modes.
+        """
+        return self.mbs_scen.mbs_validator.validate_from_scorecard(scorecard)
 
     def _update_memory(
         self,
@@ -267,12 +263,84 @@ class MBSPrepaymentRDLoop(DataScienceRDLoop):
         )
         self.mbs_scen.mbs_search_state.append(record)
 
-    @staticmethod
-    def _get_component(exp: DSExperiment) -> str:
-        """Extract the component name from an experiment's hypothesis."""
+    #: Default mapping from the DS proposal schema enum to the MBS component
+    #: namespace used by MBSSearchState / MBSOrchestrator. The DS proposer
+    #: cannot emit MBS-native names (its schema is a fixed Literal), so we
+    #: translate at record-time. ``FeatureEng`` is ambiguous — it could be
+    #: rate-curve, pool-dynamics, or macro — so ``_get_component`` inspects
+    #: the hypothesis text to pick the most specific MBS feature family
+    #: before falling back to this default.
+    DS_TO_MBS_COMPONENT: dict[str, str] = {
+        "DataLoadSpec": "DataLoader",
+        "FeatureEng": "RateCurveFeatures",
+        "Model": "PrepaymentModel",
+        "Ensemble": "Ensemble",
+        "Workflow": "ScenarioValidator",
+    }
+
+    #: MBS-native component names (from ``search_strategy.MBSComponent``) —
+    #: if the hypothesis/component text mentions one of these directly we
+    #: prefer it over the DS-enum translation.
+    _MBS_COMPONENT_NAMES: tuple[str, ...] = (
+        "DataLoader",
+        "RateCurveFeatures",
+        "PoolDynamics",
+        "MacroFeatures",
+        "PrepaymentModel",
+        "ScenarioValidator",
+        "Ensemble",
+    )
+
+    #: Keyword → MBS component heuristics for disambiguating ``FeatureEng``.
+    #: Ordered by specificity; the first keyword found in the hypothesis text
+    #: wins.
+    _FEATURE_KEYWORDS: tuple[tuple[str, str], ...] = (
+        ("burnout", "PoolDynamics"),
+        ("seasoning", "PoolDynamics"),
+        ("vintage", "PoolDynamics"),
+        ("seasonality", "PoolDynamics"),
+        ("unemployment", "MacroFeatures"),
+        ("hpi", "MacroFeatures"),
+        ("refi index", "MacroFeatures"),
+        ("macro", "MacroFeatures"),
+        ("s-curve", "RateCurveFeatures"),
+        ("rate_incentive", "RateCurveFeatures"),
+        ("rate incentive", "RateCurveFeatures"),
+    )
+
+    @classmethod
+    def _get_component(cls, exp: DSExperiment) -> str:
+        """Extract the MBS-namespace component touched by this experiment.
+
+        Priority:
+          1. If the hypothesis text directly mentions an MBS-native component
+             name, use it (proposers sometimes echo the injected phase text).
+          2. If the DS component is ``FeatureEng``, disambiguate via the
+             hypothesis keyword map.
+          3. Otherwise fall back to ``DS_TO_MBS_COMPONENT``.
+        """
         if exp is None:
             return "unknown"
         hypo = getattr(exp, "hypothesis", None)
         if hypo is None:
             return "unknown"
-        return getattr(hypo, "component", "unknown")
+        ds_component = getattr(hypo, "component", "unknown")
+        hypo_text = (
+            f"{getattr(hypo, 'hypothesis', '')} "
+            f"{getattr(hypo, 'problem_desc', '')} "
+            f"{getattr(hypo, 'reason', '')}"
+        ).lower()
+
+        # 1) direct MBS-native mention wins
+        for mbs_name in cls._MBS_COMPONENT_NAMES:
+            if mbs_name.lower() in hypo_text:
+                return mbs_name
+
+        # 2) FeatureEng: disambiguate via keywords
+        if ds_component == "FeatureEng":
+            for keyword, mbs_name in cls._FEATURE_KEYWORDS:
+                if keyword in hypo_text:
+                    return mbs_name
+
+        # 3) default translation table
+        return cls.DS_TO_MBS_COMPONENT.get(ds_component, ds_component)
