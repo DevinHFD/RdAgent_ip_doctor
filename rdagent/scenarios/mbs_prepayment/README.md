@@ -69,7 +69,8 @@ Folder contract:
 | `./mbs_data/` | Root for all MBS competitions | `MBSP_DATA_DIR`, `KG_LOCAL_DATA_PATH`, `DS_LOCAL_DATA_PATH` |
 | `./mbs_data/mbs_prepayment/` | This competition's data folder | (derived from `DS_COMPETITION`) |
 | `./mbs_data/mbs_prepayment/description.md` | Task description the DS loop reads | — |
-| `./mbs_data/mbs_prepayment/tfminput.parquet` | **Single panel file** — all cusips, all months, all features, the `smm_decimal` target | — |
+| `./mbs_data/mbs_prepayment/tfminput.pkl` | **Single pickled DataFrame** — all cusips, all months, all GNMA features pre-normalized to mean 0 / std 1, plus the unnormalized `smm_decimal` target | `MBSP_PANEL_FILENAME` |
+| `./mbs_data/mbs_prepayment/scaler.sav` | joblib-saved sklearn-style scaler used by the scaffold to inverse-transform GNMA features back to raw units (WAC %, refi incentive, etc.) for the scorecard | `MBSP_SCALER_FILENAME` |
 | `./mbs_models/` | Model checkpoints, scalers | `MBSP_MODEL_CHECKPOINT_DIR` |
 | `./mbs_output/` | Scorecards, plots, reports | `MBSP_OUTPUT_DIR` |
 | `./mbs_output/memory.json` | Phase-aware memory store | `MBSP_MEMORY_PATH` |
@@ -87,32 +88,49 @@ cp rdagent/scenarios/mbs_prepayment/example/description.md \
 
 Edit as needed — the DS loop reads this verbatim as the task spec.
 
-### 4. Drop in the panel data
+### 4. Drop in the panel data and scaler
 
-This scenario expects a **single parquet file** at
-`./mbs_data/mbs_prepayment/tfminput.parquet` containing the full
-CUSIP-level monthly panel (all cusips, all `fh_effdt` months, all
-feature columns, and the `smm_decimal` target in one file). The file
-must satisfy the data contract in [scaffold.py](scaffold.py):
+This scenario expects two files in `./mbs_data/mbs_prepayment/`:
 
-- Panel key `(cusip, fh_effdt)` — one row per CUSIP per month
-- Target column `smm_decimal` ∈ [0, 1]
-- Required feature columns: `rate_incentive, coupon, wala`
-- **No** forbidden leakage columns: `future_smm, forward_smm,
-  next_month_smm, forward_rate, future_rate_incentive`
-- Macro features lagged ≥ 30 days
+1. **`tfminput.pkl`** — a pickled `pandas.DataFrame` holding the full
+   CUSIP-level monthly panel. Every GNMA feature (see
+   [example/gnma_feature.md](example/gnma_feature.md)) is pre-built and
+   **pre-normalized to mean 0 / std 1**. The target `smm_decimal` is
+   carried **unnormalized** (decimal form in `[0, 1]`). Panel key is
+   `(cusip, fh_effdt)`.
+2. **`scaler.sav`** — a joblib-saved sklearn-style scaler
+   (`StandardScaler`-compatible: exposes `mean_`, `scale_`,
+   `feature_names_in_`). The scaffold uses it to inverse-transform the
+   GNMA feature columns back to raw units (WAC %, refi incentive, burnout
+   log-sum, WALA months, …) before scoring, so every harness diagnostic
+   is on the natural scale.
+
+Contract (see [scaffold.py](scaffold.py)):
+
+- Required GNMA features present in the panel (names must match
+  `gnma_feature.md`): `WAC`, `WALA`,
+  `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`,
+  `Avg_Prop_Switch_To_15yr_Incentive_2mos`,
+  `Burnout_Prop_WAC_30yr_log_sum60`,
+  `Burnout_Prop_30yr_Switch_to_15_Lag1`, `CLTV`, `SATO`, `Coll_HPA_2yr`
+- No forbidden leakage columns: `future_smm`, `forward_smm`,
+  `next_month_smm`, `forward_rate`, `future_rate_incentive`
+- `smm_decimal ∈ [0, 1]`
 
 The train/test split is performed in-memory on `fh_effdt`
-(`<= 2021-12-31` for train, `> 2021-12-31` for test) — there are no
-separate train/test files. The shipped `description.md` already tells
-the coder how to load and split:
+(`<= 2021-12-31` for train, `> 2021-12-31` for test). The coder loads
+the panel as:
 
 ```python
 import pandas as pd
-df = pd.read_parquet("tfminput.parquet")
-train = df[df["fh_effdt"] <= "2021-12-31"]
-test  = df[df["fh_effdt"] >  "2021-12-31"]
+df = pd.read_pickle("tfminput.pkl")
 ```
+
+Features are already built and normalized — the coder must not
+re-normalize or re-engineer them. The coder only provides a
+`build_model()` callable returning an unfitted sklearn-compatible
+estimator; the scaffold handles load → split → fit → predict → clip →
+scaler inverse-transform → scorecard → `submission.csv`.
 
 ### 5. Configure `.env`
 

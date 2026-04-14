@@ -40,7 +40,7 @@ from .evaluation import MBSEvaluationHarness
 from .memory import IterationPhase, MBSMemory
 from .orchestration import DomainValidator, MBSOrchestrator, PhaseGate
 from .personas import PersonaRouter
-from .scaffold import MBSDataContract, MBSTrainTestSplit
+from .scaffold import GNMA_HARNESS_FEATURES, MBSDataContract, MBSTrainTestSplit
 from .search_strategy import MBSSearchState, format_filter_for_prompt
 
 
@@ -72,23 +72,39 @@ class MBSPrepaymentScen(DataScienceScen):
             "(turnover + refi S-curve + burnout + curtailment)."
         )
         self.dataset_description = (
-            "Panel keyed on (cusip, fh_effdt) with required columns: "
-            f"{MBSP_SETTINGS.required_columns_list()}. Target: "
-            f"{MBSP_SETTINGS.target_column} in "
-            f"[{MBSP_SETTINGS.target_min}, {MBSP_SETTINGS.target_max}]."
+            "Single-panel layout: "
+            f"`{MBSP_SETTINGS.panel_filename}` (pickled DataFrame; all GNMA "
+            "features pre-normalized to mean 0 / std 1; keyed on "
+            f"{MBSP_SETTINGS.cusip_col}, {MBSP_SETTINGS.date_col}; carries "
+            f"the unnormalized target {MBSP_SETTINGS.target_column} in "
+            f"[{MBSP_SETTINGS.target_min}, {MBSP_SETTINGS.target_max}]) "
+            f"plus `{MBSP_SETTINGS.scaler_filename}` (joblib-saved sklearn-"
+            "style scaler that inverse-transforms the GNMA features back to "
+            "raw units — WAC as gross coupon %, "
+            "Avg_Prop_Refi_Incentive_WAC_30yr_2mos as refinance incentive, "
+            "Burnout_Prop_WAC_30yr_log_sum60 and "
+            "Burnout_Prop_30yr_Switch_to_15_Lag1 as burnout features, "
+            "WALA as weighted-average loan age). Features are already "
+            "engineered — the coder only plugs a model into the scaffold. "
+            "See example/gnma_feature.md for the full feature dictionary."
         )
         self.model_output_channel = 1
         self.metric_description = (
-            "RMSE of SMM_DECIMAL on a temporal holdout (fh_effdt > "
-            f"{MBSP_SETTINGS.train_end_date}), with per-coupon-bucket RMSE "
-            "reported separately. A model that improves overall RMSE but "
-            "degrades per-coupon uniformity, monotonicity with respect to "
-            "rate_incentive, or regime transition RMSE is a REJECT."
+            "RMSE of SMM_DECIMAL on the temporal holdout (fh_effdt > "
+            f"{MBSP_SETTINGS.train_end_date}). The scaffold inverse-transforms "
+            "the GNMA features with scaler.sav before scoring, so reported "
+            "diagnostics are in raw units: per-coupon-bucket RMSE (on raw "
+            "WAC), rate-sensitivity monotonicity (Spearman vs raw "
+            "Avg_Prop_Refi_Incentive_WAC_30yr_2mos), and regime-transition "
+            "RMSE. A model that improves overall RMSE but degrades "
+            "per-coupon uniformity, refi-incentive monotonicity, or "
+            "regime-transition RMSE is a REJECT."
         )
         self.submission_specifications = (
-            "Produce a parquet file with columns (cusip, fh_effdt, "
-            "smm_decimal_pred) covering every row of the holdout. "
-            "Predictions must be clipped to [0, 1]."
+            f"Produce {MBSP_SETTINGS.submission_filename} with columns "
+            "(cusip, fh_effdt, smm_decimal_pred) covering every holdout row "
+            f"(fh_effdt > {MBSP_SETTINGS.train_end_date}). Predictions are "
+            "automatically clipped to [0, 1] by the scaffold."
         )
         self.coder_longer_time_limit_required = False
         self.runner_longer_time_limit_required = False
@@ -98,14 +114,22 @@ class MBSPrepaymentScen(DataScienceScen):
         self.processed_data_folder_description = ""
         self.debug_path = str(MBSP_SETTINGS.data_dir / competition)
 
-        # Attach MBS building blocks so downstream coder/feedback can reach them
+        # Attach MBS building blocks so downstream coder/feedback can reach them.
+        # The panel is all-normalized; harness_raw_features names the GNMA
+        # columns the scaffold inverse-transforms via scaler.sav for scoring.
+        harness_raw = tuple(
+            dict.fromkeys(
+                list(MBSP_SETTINGS.required_columns_list()) + list(GNMA_HARNESS_FEATURES)
+            )
+        )
         self.mbs_contract = MBSDataContract(
-            required_index=(MBSP_SETTINGS.cusip_col, MBSP_SETTINGS.date_col),
-            required_columns=tuple(MBSP_SETTINGS.required_columns_list()),
-            forbidden_columns=tuple(MBSP_SETTINGS.forbidden_columns_list()),
-            target_column=MBSP_SETTINGS.target_column,
+            cusip_col=MBSP_SETTINGS.cusip_col,
+            date_col=MBSP_SETTINGS.date_col,
+            target_col=MBSP_SETTINGS.target_column,
             target_range=(MBSP_SETTINGS.target_min, MBSP_SETTINGS.target_max),
-            macro_lag_days_min=MBSP_SETTINGS.macro_lag_days_min,
+            required_columns=harness_raw,
+            harness_raw_features=harness_raw,
+            forbidden_columns=tuple(MBSP_SETTINGS.forbidden_columns_list()),
         )
         self.mbs_splitter = MBSTrainTestSplit(
             train_end_date=MBSP_SETTINGS.train_end_date,
@@ -203,12 +227,29 @@ class MBSPrepaymentScen(DataScienceScen):
         # 4) Data contract reminder
         sections.append(
             "## MBS Data Contract\n"
-            f"- Required index: {self.mbs_contract.required_index}\n"
-            f"- Required columns: {self.mbs_contract.required_columns}\n"
-            f"- Forbidden (future-leaking) columns: {self.mbs_contract.forbidden_columns}\n"
-            f"- Target: {self.mbs_contract.target_column} in "
-            f"[{self.mbs_contract.target_range[0]}, {self.mbs_contract.target_range[1]}]\n"
-            f"- Temporal split at {self.mbs_splitter.train_end_date} on {self.mbs_splitter.date_column}"
+            f"- Inputs: `{MBSP_SETTINGS.panel_filename}` (pickled DataFrame) "
+            f"+ `{MBSP_SETTINGS.scaler_filename}` (joblib-saved scaler).\n"
+            "- The panel is pre-normalized (mean 0, std 1) on all GNMA "
+            "feature columns; do NOT re-engineer or re-normalize features.\n"
+            f"- Panel index: ({self.mbs_contract.cusip_col}, "
+            f"{self.mbs_contract.date_col}). Target: "
+            f"{self.mbs_contract.target_col} in "
+            f"[{self.mbs_contract.target_range[0]}, "
+            f"{self.mbs_contract.target_range[1]}] (unnormalized).\n"
+            f"- Required GNMA features: {self.mbs_contract.required_columns}\n"
+            f"- Forbidden (future-leaking) columns: "
+            f"{self.mbs_contract.forbidden_columns}\n"
+            f"- Temporal split at {self.mbs_splitter.train_end_date} on "
+            f"{self.mbs_splitter.date_column} (embargo "
+            f"{self.mbs_splitter.embargo_months} months).\n"
+            "- Scoring: scaffold uses scaler.sav to inverse-transform GNMA "
+            "features back to raw units (WAC in %, "
+            "Avg_Prop_Refi_Incentive_WAC_30yr_2mos in raw incentive units, "
+            "etc.) so the harness measures per-coupon RMSE, refi-incentive "
+            "Spearman monotonicity, and seasoning effects on the real scale.\n"
+            f"- Submission: write `{MBSP_SETTINGS.submission_filename}` "
+            "with (cusip, fh_effdt, smm_decimal_pred). Scaffold clips "
+            "predictions to [0, 1]."
         )
 
         return base + "\n\n" + "\n\n".join(sections)

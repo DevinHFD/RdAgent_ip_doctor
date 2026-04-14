@@ -47,7 +47,19 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # 1. Filesystem layout
     # ------------------------------------------------------------------
     data_dir: Path = Path("./mbs_data")
-    """Directory containing the MBS CUSIP-level panel parquet files."""
+    """Directory containing per-competition MBS folders.
+
+    Each competition sub-folder ships a single-panel layout:
+    ``<data_dir>/<competition>/tfminput.pkl`` (normalized features, mean 0 /
+    std 1), ``<data_dir>/<competition>/scaler.sav`` (joblib-saved fitted
+    scaler inverse-transforming the GNMA features listed in
+    ``example/gnma_feature.md``), and ``<data_dir>/<competition>/description.md``.
+    """
+
+    panel_filename: str = "tfminput.pkl"
+    scaler_filename: str = "scaler.sav"
+    sample_submission_filename: str = "sample_submission.csv"
+    submission_filename: str = "submission.csv"
 
     model_checkpoint_dir: Path = Path("./mbs_models")
     """Directory for saving model weights / scalers between iterations."""
@@ -72,8 +84,13 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     target_max: float = 1.0
     cusip_col: str = "cusip"
     date_col: str = "fh_effdt"
-    required_columns: str = "rate_incentive,coupon,wala"
-    """Comma-separated list of required feature columns."""
+    required_columns: str = "WAC,WALA,Avg_Prop_Refi_Incentive_WAC_30yr_2mos"
+    """Comma-separated GNMA feature columns that must exist in the panel and
+    be invertible via ``scaler.sav`` — the harness inverse-transforms these
+    to raw scale for per-coupon bucketing, refi-incentive Spearman, and
+    seasoning diagnostics. The panel itself is stored normalized (mean 0,
+    std 1); these names drive the scorecard, not any LLM DataFrame.
+    """
     forbidden_columns: str = (
         "future_smm,forward_smm,next_month_smm,forward_rate,future_rate_incentive"
     )
@@ -89,12 +106,14 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # ------------------------------------------------------------------
     # 4. Evaluation harness (Priority 1 - evaluation.py)
     # ------------------------------------------------------------------
+    #: Coupon-bucket intervals reference the raw ``WAC`` column (GNMA gross
+    #: coupon, expressed in percent) carried unnormalized in ``info.csv``.
     coupon_buckets: str = "0.0:3.0;3.0:3.5;3.5:4.0;4.0:4.5;4.5:5.0;5.0:99.0"
     """Semicolon-separated `lo:hi` half-open intervals [lo, hi)."""
     regime_transition_dates: str = "2013-05-01,2020-03-01,2022-03-01"
-    coupon_col: str = "coupon"
-    rate_incentive_col: str = "rate_incentive"
-    wala_col: str = "wala"
+    coupon_col: str = "WAC"
+    rate_incentive_col: str = "Avg_Prop_Refi_Incentive_WAC_30yr_2mos"
+    wala_col: str = "WALA"
 
     # ------------------------------------------------------------------
     # 5. Search strategy (Priority 6)

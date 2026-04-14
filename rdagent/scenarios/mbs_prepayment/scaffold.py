@@ -1,31 +1,37 @@
 """MBS Code Scaffold — Priority 2: Hard contracts the LLM cannot violate.
 
-This module implements Direction #5 (Code Scaffold and Interface Contracts). It
-provides fixed, non-LLM-generated infrastructure that the LLM's feature
-engineering and model code must plug into. This prevents the most common MBS
-prepayment modeling errors that generic LLM code generation produces:
+This scaffold assumes the single-panel layout:
 
-    1. Treating each (cusip, fh_effdt) row as independent — losing panel structure
-    2. Random train/test split instead of temporal — causing look-ahead bias
-    3. Normalizing SMM_DECIMAL target — destroying interpretability
-    4. Same-fh_effdt macro features — direct look-ahead leakage
-    5. Forgetting to clip predictions to [0.0, 1.0]
+    <data_dir>/<competition>/
+        tfminput.pkl   # Full CUSIP-level monthly panel, ALL feature columns
+                       # stored in normalized form (mean 0, std 1). Also
+                       # carries cusip, fh_effdt, and the target
+                       # smm_decimal (which is NOT normalized, it lives in
+                       # [0, 1] already).
+        scaler.sav     # joblib-saved fitted sklearn-style scaler. Inverse-
+                       # transforms the GNMA features listed in
+                       # example/gnma_feature.md (WAC, WALA,
+                       # Avg_Prop_Refi_Incentive_WAC_30yr_2mos, burnout
+                       # features, etc.) back to their raw (percent / month)
+                       # scale — the MBS evaluation harness needs raw WAC
+                       # for coupon-bucket RMSE and raw refi-incentive for
+                       # the Spearman monotonicity check.
+        description.md
+        sample_submission.csv
 
-The scaffold is designed so that LLM-generated code cannot modify these files
-(the RD-Agent `Workflow` component spec will always overwrite them) and the
-LLM is only allowed to generate:
+The coder plugs in one LLM-controlled callable::
 
-    - feature_engineering(df) -> pd.DataFrame  (must satisfy MBSDataContract)
-    - build_model() -> sklearn-compatible estimator with .fit/.predict
+    build_model() -> sklearn-compatible estimator with .fit/.predict
 
-Everything else — loading, splitting, fitting, prediction clipping, evaluation —
-is fixed scaffold code.
+Loading, temporal splitting, scaler inverse-transform, prediction clipping,
+submission writing, and MBS scorecard evaluation are all scaffold code —
+the LLM cannot modify them.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -36,19 +42,45 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 
+#: Default GNMA feature columns (from example/gnma_feature.md) that the scaler
+#: inverse-transforms back to raw units for the evaluation harness.
+GNMA_HARNESS_FEATURES: tuple[str, ...] = (
+    "WAC",
+    "WALA",
+    "Avg_Prop_Refi_Incentive_WAC_30yr_2mos",
+    "Avg_Prop_Switch_To_15yr_Incentive_2mos",
+    "Burnout_Prop_WAC_30yr_log_sum60",
+    "Burnout_Prop_30yr_Switch_to_15_Lag1",
+    "CLTV",
+    "SATO",
+    "Coll_HPA_2yr",
+)
+
+
 @dataclass(frozen=True)
 class MBSDataContract:
-    """Schema contract for MBS prepayment data — checked at scaffold boundaries.
+    """Schema contract for the MBS panel pickle.
 
-    The LLM-generated feature engineering code must produce a DataFrame that
-    satisfies this contract. The scaffold raises `MBSContractViolation` if not.
+    The panel ships normalized (mean 0, std 1) for every feature column, but
+    the scorecard needs raw-scale values for a subset of GNMA features. That
+    subset is listed in ``harness_raw_features`` and is inverse-transformed
+    by the scaffold using ``scaler.sav`` before evaluation.
     """
 
-    #: Required columns forming the panel key.
-    required_index: tuple[str, ...] = ("cusip", "fh_effdt")
-    #: Columns that must be present for MBS-theoretic reasons.
-    required_columns: tuple[str, ...] = ("rate_incentive", "coupon", "wala")
-    #: Columns that must NEVER appear — future leakage sentinels.
+    cusip_col: str = "cusip"
+    date_col: str = "fh_effdt"
+    target_col: str = "smm_decimal"
+    target_range: tuple[float, float] = (0.0, 1.0)
+
+    #: Columns that must be present in the panel (normalized scale is fine —
+    #: these names are looked up by the scaffold and by the harness after
+    #: inverse-transform).
+    required_columns: tuple[str, ...] = GNMA_HARNESS_FEATURES
+
+    #: GNMA feature columns the scaler can invert — these drive the scorecard.
+    harness_raw_features: tuple[str, ...] = GNMA_HARNESS_FEATURES
+
+    #: Columns that must never appear — future-leakage sentinels.
     forbidden_columns: tuple[str, ...] = (
         "future_smm",
         "forward_smm",
@@ -56,50 +88,42 @@ class MBSDataContract:
         "forward_rate",
         "future_rate_incentive",
     )
-    #: Target column name.
-    target_column: str = "smm_decimal"
-    #: Valid range for target and predictions.
-    target_range: tuple[float, float] = (0.0, 1.0)
-    #: Minimum look-ahead offset for macro features (in days).
-    macro_lag_days_min: int = 30
 
     def validate(self, df: pd.DataFrame, *, include_target: bool = True) -> None:
-        """Raise MBSContractViolation if the DataFrame violates the contract."""
-        missing_idx = [c for c in self.required_index if c not in df.columns]
-        if missing_idx:
+        for c in (self.cusip_col, self.date_col):
+            if c not in df.columns:
+                raise MBSContractViolation(
+                    f"Panel missing required index column '{c}'."
+                )
+        missing = [c for c in self.required_columns if c not in df.columns]
+        if missing:
             raise MBSContractViolation(
-                f"Required index columns missing: {missing_idx}. "
-                f"MBS data must be keyed by {self.required_index}."
+                f"Panel missing required GNMA feature columns: {missing}. "
+                "These must appear in tfminput.pkl (normalized scale is fine)."
             )
-        missing_req = [c for c in self.required_columns if c not in df.columns]
-        if missing_req:
+        forbidden = [c for c in self.forbidden_columns if c in df.columns]
+        if forbidden:
             raise MBSContractViolation(
-                f"Required feature columns missing: {missing_req}. "
-                "These features are mandatory for prepayment modeling."
-            )
-        forbidden_present = [c for c in self.forbidden_columns if c in df.columns]
-        if forbidden_present:
-            raise MBSContractViolation(
-                f"Forbidden (future-leaking) columns present: {forbidden_present}. "
-                "Remove any feature derived from future observations."
+                f"Panel contains forbidden (future-leaking) columns: {forbidden}."
             )
         if include_target:
-            if self.target_column not in df.columns:
+            if self.target_col not in df.columns:
                 raise MBSContractViolation(
-                    f"Target column '{self.target_column}' missing from DataFrame."
+                    f"Panel missing target column '{self.target_col}'."
                 )
-            lo, hi = self.target_range
-            vals = df[self.target_column].to_numpy(dtype=float)
+            vals = df[self.target_col].to_numpy(dtype=float)
             finite = vals[~np.isnan(vals)]
+            lo, hi = self.target_range
             if len(finite) > 0 and (finite.min() < lo - 1e-9 or finite.max() > hi + 1e-9):
                 raise MBSContractViolation(
-                    f"Target '{self.target_column}' out of range [{lo}, {hi}]: "
-                    f"min={finite.min():.4f}, max={finite.max():.4f}"
+                    f"Target '{self.target_col}' out of range [{lo}, {hi}]: "
+                    f"min={finite.min():.4f}, max={finite.max():.4f} — the "
+                    "target must ship unnormalized in decimal form."
                 )
 
 
 class MBSContractViolation(ValueError):
-    """Raised when LLM-generated code produces a DataFrame violating MBSDataContract."""
+    """Raised when the MBS panel or scaler violates MBSDataContract."""
 
 
 # ---------------------------------------------------------------------------
@@ -109,32 +133,92 @@ class MBSContractViolation(ValueError):
 
 @dataclass
 class MBSTrainTestSplit:
-    """Fixed temporal split on fh_effdt.
+    """Fixed temporal split on fh_effdt. LLM cannot override."""
 
-    The LLM cannot override this. Random splits and any split that leaks test
-    data into training are impossible because the split is performed by the
-    scaffold, not by LLM-generated code.
-    """
-
-    #: Training cutoff date (inclusive). Rows with fh_effdt > train_end_date are test.
     train_end_date: str = "2021-12-31"
-    #: Date column name — must match the contract's index.
     date_column: str = "fh_effdt"
-    #: Optional validation gap (months) between train end and test start, to
-    #: prevent autocorrelation leakage for high-persistence SMM_DECIMAL.
     embargo_months: int = 0
 
     def split(self, df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         if self.date_column not in df.columns:
             raise MBSContractViolation(
-                f"Split date column '{self.date_column}' missing from DataFrame."
+                f"Split date column '{self.date_column}' missing from panel."
             )
         dates = pd.to_datetime(df[self.date_column], errors="coerce")
         train_cutoff = pd.Timestamp(self.train_end_date)
         test_start = train_cutoff + pd.DateOffset(months=self.embargo_months)
-        train_mask = dates <= train_cutoff
-        test_mask = dates > test_start
-        return df[train_mask].copy(), df[test_mask].copy()
+        return df[dates <= train_cutoff].copy(), df[dates > test_start].copy()
+
+
+# ---------------------------------------------------------------------------
+# Scaler inverse-transform
+# ---------------------------------------------------------------------------
+
+
+def _load_scaler(scaler_path: Path) -> Any:
+    try:
+        import joblib
+    except ImportError as e:
+        raise MBSContractViolation(
+            "joblib is required to load scaler.sav — install it in the runner env."
+        ) from e
+    if not scaler_path.exists():
+        raise MBSContractViolation(f"Missing scaler file: {scaler_path}")
+    return joblib.load(scaler_path)
+
+
+def inverse_transform_features(
+    df: pd.DataFrame, scaler: Any, feature_names: Sequence[str]
+) -> pd.DataFrame:
+    """Return a DataFrame of raw-scale values for the named GNMA features.
+
+    The scaler is expected to be a sklearn-style object with either
+    ``inverse_transform`` (operating on the full normalized feature matrix)
+    or the ``mean_`` / ``scale_`` attribute pair. We prefer per-column
+    reconstruction so callers can pass a subset of columns.
+    """
+    out_cols: dict[str, np.ndarray] = {}
+    mean_ = getattr(scaler, "mean_", None)
+    scale_ = getattr(scaler, "scale_", None)
+    raw_names = getattr(scaler, "feature_names_in_", None)
+    feature_names_in = list(raw_names) if raw_names is not None else []
+    missing = [f for f in feature_names if f not in df.columns]
+    if missing:
+        raise MBSContractViolation(
+            f"Features requested for inverse-transform not in panel: {missing}"
+        )
+    if mean_ is not None and scale_ is not None and feature_names_in:
+        idx_map = {name: i for i, name in enumerate(feature_names_in)}
+        for f in feature_names:
+            if f not in idx_map:
+                raise MBSContractViolation(
+                    f"Scaler does not know feature '{f}'. "
+                    f"Known: {feature_names_in[:10]}..."
+                )
+            i = idx_map[f]
+            out_cols[f] = df[f].to_numpy(dtype=float) * scale_[i] + mean_[i]
+        return pd.DataFrame(out_cols, index=df.index)
+    if hasattr(scaler, "inverse_transform") and feature_names_in:
+        # Fall back to full-matrix inverse_transform using the scaler's known columns.
+        known = [c for c in feature_names_in if c in df.columns]
+        if not known:
+            raise MBSContractViolation(
+                "Scaler exposes inverse_transform but no known features overlap the panel."
+            )
+        block = df[known].to_numpy(dtype=float)
+        inv = scaler.inverse_transform(block)
+        inv_df = pd.DataFrame(inv, columns=known, index=df.index)
+        for f in feature_names:
+            if f not in inv_df.columns:
+                raise MBSContractViolation(
+                    f"Scaler cannot inverse '{f}' — not in scaler.feature_names_in_."
+                )
+            out_cols[f] = inv_df[f].to_numpy(dtype=float)
+        return pd.DataFrame(out_cols, index=df.index)
+    raise MBSContractViolation(
+        "scaler.sav must expose either (mean_, scale_, feature_names_in_) or "
+        "(inverse_transform, feature_names_in_)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +227,6 @@ class MBSTrainTestSplit:
 
 
 def clip_predictions(y_pred: np.ndarray, contract: MBSDataContract) -> np.ndarray:
-    """Clip predictions to the valid target range.
-
-    Applied unconditionally after LLM-generated `model.predict()` — the LLM
-    does not need to remember to clip, the scaffold does it.
-    """
     lo, hi = contract.target_range
     return np.clip(np.asarray(y_pred, dtype=float), lo, hi)
 
@@ -159,74 +238,56 @@ def clip_predictions(y_pred: np.ndarray, contract: MBSDataContract) -> np.ndarra
 
 @dataclass
 class MBSWorkflow:
-    """Fixed workflow: load → contract-check → split → featurize → fit → predict → evaluate.
+    """Fixed workflow: load → validate → split → fit → predict → clip.
 
-    The LLM only provides:
-        feature_fn: a callable that takes a raw DataFrame and returns a
-            contract-conformant DataFrame with engineered features.
-        model_builder: a callable that returns a fresh, unfitted estimator.
-
-    Everything else is scaffold and not LLM-modifiable.
+    The LLM only provides ``model_builder()`` returning a fresh, unfitted
+    estimator with ``.fit(X, y)`` and ``.predict(X)``. Features are
+    pre-built and pre-normalized — no feature-engineering hook.
     """
 
     contract: MBSDataContract = field(default_factory=MBSDataContract)
     splitter: MBSTrainTestSplit = field(default_factory=MBSTrainTestSplit)
 
+    def _feature_columns(self, df: pd.DataFrame) -> list[str]:
+        drop = {self.contract.cusip_col, self.contract.date_col, self.contract.target_col}
+        return [c for c in df.columns if c not in drop]
+
     def run(
         self,
-        raw_df: pd.DataFrame,
-        feature_fn: Callable[[pd.DataFrame], pd.DataFrame],
+        panel: pd.DataFrame,
         model_builder: Callable[[], Any],
-        exclude_from_features: tuple[str, ...] = (),
     ) -> dict[str, Any]:
-        """Run the full pipeline and return a result dict.
-
-        Returns:
-            dict with keys:
-                - y_true: np.ndarray of test SMM_DECIMAL
-                - y_pred: np.ndarray of clipped test predictions
-                - features_test: pd.DataFrame used for test-time evaluation
-                - model: the fitted model
-        """
-        # 1. Validate raw DataFrame (must have target + required columns)
-        self.contract.validate(raw_df, include_target=True)
-
-        # 2. Temporal split — LLM cannot override
-        raw_train, raw_test = self.splitter.split(raw_df)
-        if len(raw_train) == 0 or len(raw_test) == 0:
+        self.contract.validate(panel, include_target=True)
+        train_df, test_df = self.splitter.split(panel)
+        if len(train_df) == 0 or len(test_df) == 0:
             raise MBSContractViolation(
-                f"Split produced empty partition: train={len(raw_train)}, test={len(raw_test)}. "
-                f"Check train_end_date={self.splitter.train_end_date}."
+                f"Split produced empty partition: train={len(train_df)}, "
+                f"test={len(test_df)}. Check train_end_date={self.splitter.train_end_date}."
             )
+        feat_cols = self._feature_columns(panel)
+        X_train = train_df[feat_cols].to_numpy(dtype=float)
+        y_train = train_df[self.contract.target_col].to_numpy(dtype=float)
+        X_test = test_df[feat_cols].to_numpy(dtype=float)
+        y_test = test_df[self.contract.target_col].to_numpy(dtype=float)
 
-        # 3. Feature engineering — LLM-generated, but validated after
-        feat_train = feature_fn(raw_train)
-        feat_test = feature_fn(raw_test)
-        self.contract.validate(feat_train, include_target=True)
-        self.contract.validate(feat_test, include_target=True)
-
-        # 4. Build X/y — scaffold controls this, not LLM
-        drop_cols = set(
-            self.contract.required_index + (self.contract.target_column,) + tuple(exclude_from_features)
-        )
-        x_cols = [c for c in feat_train.columns if c not in drop_cols]
-        X_train = feat_train[x_cols].to_numpy(dtype=float)
-        y_train = feat_train[self.contract.target_column].to_numpy(dtype=float)
-        X_test = feat_test[x_cols].to_numpy(dtype=float)
-        y_test = feat_test[self.contract.target_column].to_numpy(dtype=float)
-
-        # 5. Fit + predict + clip — scaffold guarantees valid range
         model = model_builder()
         model.fit(X_train, y_train)
-        y_pred_raw = model.predict(X_test)
-        y_pred = clip_predictions(y_pred_raw, self.contract)
+        y_pred = clip_predictions(model.predict(X_test), self.contract)
 
+        submission = pd.DataFrame(
+            {
+                self.contract.cusip_col: test_df[self.contract.cusip_col].values,
+                self.contract.date_col: test_df[self.contract.date_col].values,
+                f"{self.contract.target_col}_pred": y_pred,
+            }
+        )
         return {
+            "model": model,
             "y_true": y_test,
             "y_pred": y_pred,
-            "features_test": feat_test,
-            "model": model,
-            "feature_columns": x_cols,
+            "test_df": test_df,
+            "feature_columns": feat_cols,
+            "submission": submission,
         }
 
 
@@ -236,49 +297,71 @@ class MBSWorkflow:
 
 
 def run_scaffold_pipeline(
-    raw_df: pd.DataFrame,
-    feature_fn: Callable[[pd.DataFrame], pd.DataFrame],
+    panel_path: str | Path,
+    scaler_path: str | Path,
     model_builder: Callable[[], Any],
     output_dir: str | Path,
     contract: MBSDataContract | None = None,
     splitter: MBSTrainTestSplit | None = None,
 ) -> dict[str, Any]:
-    """Top-level scaffold entry — combines workflow + evaluation + scorecard write.
+    """End-to-end scaffold entry for the Workflow component's ``main.py``.
 
-    This is what the `main.py` template (Workflow component) calls. LLM-generated
-    feature_fn and model_builder are plugged in, but loading, splitting,
-    evaluation, and scorecard dumping are all scaffold code.
+    - ``panel_path``: ``tfminput.pkl`` path (normalized panel).
+    - ``scaler_path``: ``scaler.sav`` path (joblib).
+    - ``model_builder``: LLM-provided callable returning an unfitted model.
+    - ``output_dir``: workspace output root. Writes ``submission.csv``
+      (normalized test rows + predictions), ``scores.json`` (full MBS
+      scorecard computed on raw-scale GNMA features via the scaler), and
+      ``scores.csv`` (primary metric bridged for the DS runner).
     """
-    from rdagent.scenarios.mbs_prepayment.evaluation import MBSEvaluationHarness, write_scorecard
+    from rdagent.scenarios.mbs_prepayment.evaluation import (
+        MBSEvaluationHarness,
+        write_scorecard,
+    )
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    panel = pd.read_pickle(panel_path)
+    if not isinstance(panel, pd.DataFrame):
+        raise MBSContractViolation(
+            f"{panel_path} must unpickle to a DataFrame; got {type(panel).__name__}."
+        )
+    scaler = _load_scaler(Path(scaler_path))
 
     workflow = MBSWorkflow(
         contract=contract or MBSDataContract(),
         splitter=splitter or MBSTrainTestSplit(),
     )
-    result = workflow.run(raw_df, feature_fn, model_builder)
+    result = workflow.run(panel, model_builder)
 
+    # Persist submission in DS-compatible format.
+    submission_path = output_dir / "submission.csv"
+    result["submission"].to_csv(submission_path, index=False)
+
+    # Harness needs raw-scale GNMA features — inverse-transform and assemble
+    # a feature frame carrying cusip/fh_effdt + raw-scale metadata.
+    test_df: pd.DataFrame = result["test_df"]
+    raw_feats = inverse_transform_features(
+        test_df, scaler, workflow.contract.harness_raw_features
+    )
+    harness_features = pd.concat(
+        [
+            test_df[[workflow.contract.cusip_col, workflow.contract.date_col]].reset_index(drop=True),
+            raw_feats.reset_index(drop=True),
+        ],
+        axis=1,
+    )
     harness = MBSEvaluationHarness()
     scorecard = harness.evaluate(
-        y_true=result["y_true"],
-        y_pred=result["y_pred"],
-        features=result["features_test"],
+        y_true=result["y_true"], y_pred=result["y_pred"], features=harness_features
     )
     write_scorecard(scorecard, str(output_dir / "scores.json"))
 
-    # Bridge: write scores.csv so the DS runner can consume the primary metric.
-    # The DS runner expects a CSV with model names as index and the scenario's
-    # metric_name as column.  MBSPrepaymentScen.metric_name is "rmse_smm_decimal"
-    # (see scenario.py); the scorecard's primary_metric.name is "overall_rmse"
-    # which would not match scen.metric_name, so we hard-code the column name
-    # here to keep the runner contract satisfied.
     primary_value = scorecard.get("primary_metric", {}).get("value", float("nan"))
-    scores_csv_path = output_dir / "scores.csv"
     pd.DataFrame(
         {"rmse_smm_decimal": [primary_value]},
         index=pd.Index(["ensemble"], name=""),
-    ).to_csv(scores_csv_path)
+    ).to_csv(output_dir / "scores.csv")
 
-    return {"result": result, "scorecard": scorecard}
+    return {"result": result, "scorecard": scorecard, "submission_path": str(submission_path)}
