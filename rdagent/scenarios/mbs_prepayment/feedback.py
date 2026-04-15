@@ -108,21 +108,44 @@ class MBSExperiment2Feedback(DSExperiment2Feedback):
 
         # Build prompts — reuse DS templates but prepend MBS context
         base_scenario_desc = self.scen.get_scenario_all_desc(eda_output=eda_output)
-        system_prompt = T(f".prompts:{self.version}.system").r(
+        # Use absolute template path — `.prompts:` would resolve relative to
+        # this module (rdagent/scenarios/mbs_prepayment/prompts.yaml), which
+        # does not carry the DS exp_feedback schema. The DS feedback
+        # templates live in scenarios/data_science/dev/prompts.yaml.
+        system_prompt = T(f"scenarios.data_science.dev.prompts:{self.version}.system").r(
             scenario=base_scenario_desc
         )
         # Prepend the model validator persona
         system_prompt = validator_preamble + "\n\n" + system_prompt
 
-        user_prompt = T(f".prompts:{self.version}.user").r(
+        user_prompt = T(f"scenarios.data_science.dev.prompts:{self.version}.user").r(
             sota_desc=sota_desc,
             cur_exp=exp,
             diff_edition=diff_edition,
             feedback_desc=feedback_desc,
             cur_vs_sota_score=cur_vs_sota_score,
         )
-        # Append MBS scorecard and memory to user prompt
-        user_prompt = user_prompt + mbs_scorecard_text + "\n" + mbs_memory_text
+        # 4) Pull the MBS-specific feedback-schema extra fields so the LLM's
+        # JSON response includes rate_sensitivity_check, burnout_check, etc.
+        # Source of truth: scenarios/mbs_prepayment/prompts.yaml.
+        try:
+            mbs_schema_extra = T("scenarios.mbs_prepayment.prompts:feedback_schema_extra").r()
+        except (FileNotFoundError, KeyError):
+            mbs_schema_extra = ""
+        if mbs_schema_extra:
+            mbs_schema_extra = (
+                "\n\n## Additional MBS Feedback Fields (MUST be present in JSON response)\n"
+                + mbs_schema_extra
+            )
+
+        # Append MBS scorecard, memory, and schema extras to user prompt
+        user_prompt = (
+            user_prompt
+            + mbs_scorecard_text
+            + "\n"
+            + mbs_memory_text
+            + mbs_schema_extra
+        )
 
         resp_dict = json.loads(
             APIBackend().build_messages_and_create_chat_completion(

@@ -1,0 +1,25 @@
+# MBS Prepayment overrides for rdagent/scenarios/data_science/share.yaml.
+#
+# Loaded with higher priority than the DS defaults when
+# RD_AGENT_SETTINGS.app_tpl == "app/mbs_prepayment/tpl" (set by
+# rdagent/app/mbs_prepayment/loop.py).
+#
+# Only keys we actually override live here — missing keys fall through to the
+# DS share.yaml by the T()/load_content KeyError fallback.
+#
+# The content itself is sourced from scenarios/mbs_prepayment/prompts.yaml so
+# there is a single source of truth for MBS prompt text.
+
+scen:
+  role: |-
+    {% include "scenarios.mbs_prepayment.prompts:scen.role" %}
+
+component_spec:
+  DataLoadSpec: |-
+    {% include "scenarios.mbs_prepayment.prompts:component_spec.DataLoader" %}
+  FeatureEng: |-
+    {% include "scenarios.mbs_prepayment.prompts:component_spec.FeatureEng" %}
+  Model: |-
+    {% include "scenarios.mbs_prepayment.prompts:component_spec.PrepaymentModel" %}
+  Workflow: |-
+    {% include "scenarios.mbs_prepayment.prompts:component_spec.ScenarioValidator" %}

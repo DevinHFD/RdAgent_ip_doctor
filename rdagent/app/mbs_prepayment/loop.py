@@ -19,9 +19,18 @@ from typing import Optional
 import fire
 
 from rdagent.app.data_science.conf import DS_RD_SETTING
+from rdagent.core.conf import RD_AGENT_SETTINGS
 from rdagent.core.utils import import_class
 from rdagent.log import rdagent_logger as logger
-from rdagent.scenarios.mbs_prepayment.loop import MBSPrepaymentRDLoop
+
+# Activate MBS prompt overrides (scen.role, component_spec.*, hypothesis_specification)
+# before any T(...) call caches a template. These overrides shadow
+# rdagent/scenarios/data_science/share.yaml and proposal/exp_gen/prompts.yaml
+# when app_tpl is set, and source their content from
+# rdagent/scenarios/mbs_prepayment/prompts.yaml via Jinja includes.
+RD_AGENT_SETTINGS.app_tpl = "app/mbs_prepayment/tpl"
+
+from rdagent.scenarios.mbs_prepayment.loop import MBSPrepaymentRDLoop  # noqa: E402
 
 
 def main(

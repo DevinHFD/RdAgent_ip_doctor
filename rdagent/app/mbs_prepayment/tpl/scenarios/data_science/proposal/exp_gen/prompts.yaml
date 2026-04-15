@@ -1,0 +1,9 @@
+# MBS Prepayment override for DS proposal prompts.
+#
+# The DS proposer loads hypothesis_specification via
+# T(".prompts:hypothesis_specification") from proposal/exp_gen/prompts.yaml.
+# With app_tpl set to app/mbs_prepayment/tpl, this file is consulted first.
+# We route the value through the MBS prompts.yaml source of truth.
+
+hypothesis_specification: |-
+  {% include "scenarios.mbs_prepayment.prompts:hypothesis_specification" %}
