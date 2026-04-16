@@ -112,7 +112,7 @@ Contract (see [scaffold.py](scaffold.py)):
   `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`,
   `Avg_Prop_Switch_To_15yr_Incentive_2mos`,
   `Burnout_Prop_WAC_30yr_log_sum60`,
-  `Burnout_Prop_30yr_Switch_to_15_Lag1`, `CLTV`, `SATO`, `Coll_HPA_2yr`
+  `Burnout_Prop_30yr_Switch_to_15_Lag1`, `CLTV`, `SATO`, `Pool_HPA_2yr`
 - No forbidden leakage columns: `future_smm`, `forward_smm`,
   `next_month_smm`, `forward_rate`, `future_rate_incentive`
 - `smm_decimal ∈ [0, 1]`

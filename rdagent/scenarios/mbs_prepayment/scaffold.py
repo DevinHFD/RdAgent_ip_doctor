@@ -53,7 +53,7 @@ GNMA_HARNESS_FEATURES: tuple[str, ...] = (
     "Burnout_Prop_30yr_Switch_to_15_Lag1",
     "CLTV",
     "SATO",
-    "Coll_HPA_2yr",
+    "Pool_HPA_2yr",
 )
 
 

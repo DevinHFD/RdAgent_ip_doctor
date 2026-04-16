@@ -43,7 +43,7 @@
 | Burnout_Prop_WAC_30yr_log_sum60 | Burnout: 30yr, log sum over last 60 months | float |
 | Burnout_Prop_30yr_Switch_to_15_Lag1 | Burnout: 30yr to 15yr, lagged by 1 month | float |
 | CLTV | Current LTV (CLTV) | float |
-| Coll_HPA_2yr | Pool level HPA over the last 2 yrs | float |
+| Pool_HPA_2yr | Pool level HPA over the last 2 yrs | float |
 | WALA_less_eq_6 | Indicator for WALA ≤ 6 | int |
 | WALA_bet_7_and_12 | Indicator for WALA between 7 and 12 | int |
 | WALA | Weighted Average Loan Age | float |

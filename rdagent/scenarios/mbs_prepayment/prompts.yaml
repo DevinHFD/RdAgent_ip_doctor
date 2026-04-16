@@ -142,32 +142,55 @@ component_spec:
   FeatureEng: |
     ## FeatureEng Specification
 
-    Transform the raw panel DataFrame into a feature-engineered DataFrame
-    that still satisfies MBSDataContract (see scaffold.py).
+    The panel `tfminput.pkl` ships ~62 PRE-BUILT and PRE-NORMALIZED
+    (mean 0, std 1) GNMA features documented in `gnma_feature.md`.
+    Feature engineering should build on these existing columns.
 
-    ### Canonical features you should create
-    - `rate_incentive` (if not present): WAC - current_mortgage_rate
-    - `coupon_bucket`: categorical binning of coupon — [<3.0, 3.0-3.5,
+    ### What you CAN do
+    - Select a subset of existing columns for model input
+    - Create interaction terms between existing columns (e.g., multiply
+      two columns to capture joint effects)
+    - Apply non-linear transforms (square, log1p, clipping, binning)
+      to existing columns
+    - Derive new features from existing columns with prepayment-theoretic
+      justification
+
+    ### Example derived features (from existing columns)
+    - `seasoning_ramp`: min(WALA, 30) / 30 (prepayment ramps up in first
+      30 months of loan age)
+    - `coupon_bucket`: categorical binning of WAC — [<3.0, 3.0-3.5,
       3.5-4.0, 4.0-4.5, 4.5-5.0, 5.0+]
-    - `burnout_index`: exponential decay of cumulative months in-the-money,
-      OR ratio of recent ITM months to total ITM months
-    - `seasoning_ramp`: min(WALA, 30) / 30 (prepayment ramps up in first 30
-      months of loan age)
-    - `yield_curve_slope`: 10yr_treasury - 2yr_treasury
-    - `refi_efficiency`: 3-month moving average of market refi application
-      index (media effect proxy)
-    - Seasonal encoding: month-of-year cyclical (sin/cos) OR month dummies
+    - Interaction: `Avg_Prop_Refi_Incentive_WAC_30yr_2mos` ×
+      `Burnout_Prop_WAC_30yr_log_sum60` (burnout moderates refi response)
 
-    ### Static vs dynamic feature distinction
-    - STATIC (per CUSIP): origination_wac, original_ltv, coupon, original_balance
-    - DYNAMIC (per (cusip, fh_effdt)): current wac, current wam, current wala,
-      rate_incentive, burnout_index, all macro features
+    ### What you MUST NOT do
+    - Do NOT target-encode `cusip` or any identifier column (no
+      `cusip_target_enc`, `cusip_mean_enc`, or similar — cusip is a
+      panel key, not a feature)
+    - Do NOT re-normalize or re-standardize features — they are already
+      normalized
+    - Do NOT introduce any forbidden column (`future_smm`, `forward_smm`,
+      `next_month_smm`, `forward_rate`, `future_rate_incentive`)
+    - Do NOT look up or join external data that is not in `tfminput.pkl`
+    - Do NOT rename existing columns — downstream scaffold code depends
+      on exact column names
+
+    ### Key pre-built feature families (already in the panel)
+    - **Rate incentive**: `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`,
+      `Avg_Prop_Switch_To_15yr_Incentive_2mos`
+    - **Burnout**: `Burnout_Prop_WAC_30yr_log_sum60`,
+      `Burnout_Prop_30yr_Switch_to_15_Lag1`
+    - **Seasoning**: `WALA`, `WALA_less_eq_6`, `WALA_bet_7_and_12`
+    - **Seasonality**: `is_Jan` through `is_Nov`, `Num_Business_Days`
+    - **Credit / collateral**: `CLTV`, `SATO`, `Orig_FICO`, `Orig_LTV`,
+      `Pool_HPA_2yr`, `Orig_Avg_Loan_Size`
+    - **Coupon**: `WAC`
+    - **Geography, servicer, channel, program**: see `gnma_feature.md`
 
     ### Constraints
-    - Must NOT introduce any forbidden column (future_smm, forward_rate, etc.)
-    - Must NOT normalize smm_decimal — it must remain in [0.0, 1.0] in its
-      natural scale for interpretability and downstream use
-    - Macro features must be lagged (at least 1 month)
+    - Must NOT normalize smm_decimal — it must remain in [0.0, 1.0]
+    - Every new derived feature must have prepayment-theoretic
+      justification — no blind feature generation
 
   PrepaymentModel: |
     ## PrepaymentModel Specification

@@ -42,7 +42,7 @@ respect MBS prepayment theory:
     `Burnout_Prop_30yr_Switch_to_15_Lag1`
   - Loan age: `WALA` (+ indicators `WALA_less_eq_6`, `WALA_bet_7_and_12`)
   - Collateral / credit: `CLTV`, `Orig_FICO`, `Orig_LTV`, `SATO`,
-    `Coll_HPA_2yr`, `Orig_Avg_Loan_Size`
+    `Pool_HPA_2yr`, `Orig_Avg_Loan_Size`
   - Servicer mix, channel mix, geography, program (FHA/VA), seasonality
 - **Forbidden features** (future leakage): `future_smm`, `forward_smm`,
   `next_month_smm`, `forward_rate`, `future_rate_incentive`
