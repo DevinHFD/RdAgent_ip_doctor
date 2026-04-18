@@ -209,6 +209,38 @@ component_spec:
 
     Build a fit-and-predict model for SMM_DECIMAL.
 
+    ### Current SOTA model (beat this)
+    MLP neural network trained on **all features in gnma_feature.md**:
+    - Architecture: 3 hidden layers with [10, 20, 10] units
+    - Activation: Leaky ReLU in hidden layers, Sigmoid on final output layer
+    - Loss: fh_upb-weighted RMSE where fh_upb is capped at 150M per pool
+      (i.e., `sample_weight = np.minimum(df["fh_upb"], 150e6)` passed to the
+      loss / fit method — larger pools contribute more to the training loss)
+    - Features: all GNMA feature columns from gnma_feature.md (already
+      normalized in tfminput.pkl; do NOT re-normalize)
+
+    ### Search strategy
+    **Start with GBM models** (LightGBM, XGBoost, CatBoost) as the primary
+    search path — they are faster to iterate and often competitive. Also
+    explore neural network architectures, especially deeper or wider MLPs,
+    attention-based models, or models that incorporate the UPB-weighted loss.
+    Hypotheses that improve over the SOTA MLP are most valuable.
+
+    ### UPB-weighted loss
+    The SOTA model uses fh_upb-weighted RMSE. To replicate this:
+    ```python
+    import numpy as np
+    weights = np.minimum(df_train["fh_upb"].to_numpy(), 150e6)
+    # For sklearn estimators: model.fit(X_train, y_train, sample_weight=weights)
+    # For PyTorch: pass weights to your loss function
+    # For LightGBM: lgbm.fit(X_train, y_train, sample_weight=weights)
+    # For XGBoost: xgb.fit(X_train, y_train, sample_weight=weights,
+    #                       eval_set=[(X_val, y_val)])
+    ```
+    Note: `fh_upb` is a feature column in tfminput.pkl (remaining unpaid
+    principal balance). It is NOT the target variable; it is used only as
+    a training weight.
+
     ### Interface
     Implement a callable `build_model()` returning a fresh, unfitted estimator
     with sklearn-compatible `.fit(X, y)` and `.predict(X) -> np.ndarray` methods.
@@ -241,8 +273,10 @@ component_spec:
       outputs (e.g., GradientBoostingRegressor with loss='huber',
       neural net with sigmoid output, GAM with logit link).
     - Keep model complexity reasonable for the panel size (~4.5M rows).
-      A 500-tree LightGBM on the full panel approaches the 1-hour time
-      limit. Start with 100–200 trees and tune from there.
+      The runtime hard limit is **3 hours**. A 500-tree LightGBM on the
+      full panel takes ~45 min; start with 100–200 trees and scale up.
+      For PyTorch MLPs, use mini-batch training (batch_size ≥ 4096) with
+      an early-stopping callback on validation RMSE.
 
   ScenarioValidator: |
     ## ScenarioValidator Specification

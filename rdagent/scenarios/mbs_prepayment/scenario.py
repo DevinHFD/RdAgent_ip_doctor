@@ -97,7 +97,11 @@ class MBSPrepaymentScen(DataScienceScen):
             "WAC), S-curve R² and inflection point (vs raw "
             "Avg_Prop_Refi_Incentive_WAC_30yr_2mos), and regime-transition "
             "RMSE. A model that improves overall RMSE but degrades "
-            "per-coupon uniformity or regime-transition RMSE is a REJECT."
+            "per-coupon uniformity or regime-transition RMSE is a REJECT. "
+            "Current SOTA: MLP [10, 20, 10] hidden units, Leaky ReLU hidden "
+            "activations, Sigmoid output, trained on all GNMA features with "
+            "fh_upb-weighted RMSE (fh_upb capped at 150M). "
+            f"Runtime hard limit: {MBSP_SETTINGS.validator_max_training_seconds/3600:.0f} hours."
         )
         self.submission_specifications = (
             f"Produce {MBSP_SETTINGS.submission_filename} with columns "

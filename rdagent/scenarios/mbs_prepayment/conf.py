@@ -132,7 +132,7 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # ------------------------------------------------------------------
     # 7. Domain validator (Priority 8)
     # ------------------------------------------------------------------
-    validator_max_training_seconds: float = 3600.0
+    validator_max_training_seconds: float = 10800.0
 
     # ------------------------------------------------------------------
     # 8. Phase gates (Priority 8)
@@ -157,7 +157,7 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     stage_data_load_memory_gb: float = 16.0
     stage_feature_eng_timeout: int = 600
     stage_feature_eng_memory_gb: float = 24.0
-    stage_training_timeout: int = 3600
+    stage_training_timeout: int = 10800
     stage_training_memory_gb: float = 32.0
     stage_training_allow_gpu: bool = True
     stage_evaluation_timeout: int = 300
