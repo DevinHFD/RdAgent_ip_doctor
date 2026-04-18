@@ -21,5 +21,7 @@ component_spec:
     {% include "scenarios.mbs_prepayment.prompts:component_spec.FeatureEng" %}
   Model: |-
     {% include "scenarios.mbs_prepayment.prompts:component_spec.PrepaymentModel" %}
+  Ensemble: |-
+    {% include "scenarios.mbs_prepayment.prompts:component_spec.Ensemble" %}
   Workflow: |-
-    {% include "scenarios.mbs_prepayment.prompts:component_spec.ScenarioValidator" %}
+    {% include "scenarios.mbs_prepayment.prompts:component_spec.Workflow" %}

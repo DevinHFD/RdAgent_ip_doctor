@@ -100,7 +100,7 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # ------------------------------------------------------------------
     # 3. Temporal train/test split
     # ------------------------------------------------------------------
-    train_end_date: str = "2021-12-31"
+    train_end_date: str = "2024-10-31"
     embargo_months: int = 0
 
     # ------------------------------------------------------------------

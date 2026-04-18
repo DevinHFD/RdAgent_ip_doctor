@@ -135,7 +135,7 @@ class MBSContractViolation(ValueError):
 class MBSTrainTestSplit:
     """Fixed temporal split on fh_effdt. LLM cannot override."""
 
-    train_end_date: str = "2021-12-31"
+    train_end_date: str = "2024-10-31"
     date_column: str = "fh_effdt"
     embargo_months: int = 0
 
@@ -144,7 +144,17 @@ class MBSTrainTestSplit:
             raise MBSContractViolation(
                 f"Split date column '{self.date_column}' missing from panel."
             )
-        dates = pd.to_datetime(df[self.date_column], errors="coerce")
+        # fh_effdt is stored as integer YYYYMMDD (e.g., 20241031) in the
+        # panel pickle.  Plain pd.to_datetime(..., errors="coerce") would
+        # interpret these integers as nanoseconds-since-epoch (a date in
+        # 1970), producing NaT or wrong dates and causing empty holdout sets.
+        dates = pd.to_datetime(df[self.date_column], format="%Y%m%d", errors="coerce")
+        n_nat = dates.isna().sum()
+        if n_nat > 0:
+            raise MBSContractViolation(
+                f"{n_nat} rows have unparseable {self.date_column} values "
+                f"(expected integer YYYYMMDD). Check the panel data."
+            )
         train_cutoff = pd.Timestamp(self.train_end_date)
         test_start = train_cutoff + pd.DateOffset(months=self.embargo_months)
         return df[dates <= train_cutoff].copy(), df[dates > test_start].copy()

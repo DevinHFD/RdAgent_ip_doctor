@@ -76,8 +76,8 @@ There are **no separate train/test files** — the scaffold splits on
 **Temporal split only** — no random shuffle. The scaffold applies:
 
 ```python
-train = df[df["fh_effdt"] <= "2021-12-31"]
-test  = df[df["fh_effdt"] >  "2021-12-31"]
+train = df[df["fh_effdt"] <= "2024-10-31"]
+test  = df[df["fh_effdt"] >  "2024-10-31"]
 ```
 
 ---
@@ -108,7 +108,7 @@ uniformity**, refi-incentive monotonicity, or regime-transition RMSE is a
 
 The scaffold writes `submission.csv` with columns
 `(cusip, fh_effdt, smm_decimal_pred)` covering every holdout row
-(i.e. every row with `fh_effdt > 2021-12-31` in `tfminput.pkl`). Predictions
+(i.e. every row with `fh_effdt > 2024-10-31` in `tfminput.pkl`). Predictions
 are automatically clipped to `[0, 1]` by the scaffold. The coder only needs
 to provide a `build_model()` callable returning an unfitted
 sklearn-compatible estimator.

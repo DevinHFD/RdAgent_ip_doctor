@@ -118,7 +118,7 @@ Contract (see [scaffold.py](scaffold.py)):
 - `smm_decimal ∈ [0, 1]`
 
 The train/test split is performed in-memory on `fh_effdt`
-(`<= 2021-12-31` for train, `> 2021-12-31` for test). The coder loads
+(`<= 2024-10-31` for train, `> 2024-10-31` for test). The coder loads
 the panel as:
 
 ```python
@@ -192,7 +192,7 @@ The settings class in [conf.py](conf.py):
 class MBSPrepaymentSettings(ExtendedBaseSettings):
     model_config = SettingsConfigDict(env_prefix="MBSP_", protected_namespaces=())
 
-    train_end_date: str = "2021-12-31"
+    train_end_date: str = "2024-10-31"
     gate_baseline_max_rmse: float = 0.040
     # ...
 ```
@@ -415,7 +415,7 @@ MBSPrepaymentRDLoop.running()                                  [inherited from D
 │   │   │       ├── pd.read_pickle("tfminput.pkl")             ← load panel
 │   │   │       ├── MBSDataContract.validate(panel)            ← check required/forbidden cols
 │   │   │       ├── MBSWorkflow.run(panel, model_builder)
-│   │   │       │   ├── MBSTrainTestSplit.split(df)            ← temporal on fh_effdt ≤ 2021-12-31
+│   │   │       │   ├── MBSTrainTestSplit.split(df)            ← temporal on fh_effdt ≤ 2024-10-31
 │   │   │       │   ├── model_builder().fit(X_train, y_train)  ← LLM-generated model
 │   │   │       │   ├── model.predict(X_test)
 │   │   │       │   └── clip_predictions(y_pred, contract)     ← clamp to [0, 1]

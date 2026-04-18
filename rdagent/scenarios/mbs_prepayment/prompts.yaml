@@ -119,10 +119,19 @@ component_spec:
     Load CUSIP-level MBS panel data plus macro time series and join on
     fh_effdt (with at least 1-month lag on all macro features).
 
+    ### Data format
+    - `tfminput.pkl` is the single panel pickle.
+    - `fh_effdt` is stored as **integer YYYYMMDD** (e.g., `20241031`).
+      To parse: `pd.to_datetime(df["fh_effdt"], format="%Y%m%d")`.
+      Do NOT use `pd.to_datetime(df["fh_effdt"])` without the format —
+      it will silently misinterpret integers as nanoseconds-since-epoch.
+    - All GNMA features are pre-normalized (mean 0, std 1).
+    - `smm_decimal` is NOT normalized — it is already in [0, 1].
+
     ### Required output schema
     Panel DataFrame keyed by `(cusip, fh_effdt)` with:
       - `cusip` (str): 9-char pool identifier
-      - `fh_effdt` (datetime): month-end factor-history date
+      - `fh_effdt` (int): factor-history effective date as YYYYMMDD integer
       - `smm_decimal` (float in [0.0, 1.0]): target variable
       - `coupon` (float): CUSIP note rate
       - `wac` (float): weighted average coupon of underlying loans
@@ -201,6 +210,33 @@ component_spec:
     Implement a callable `build_model()` returning a fresh, unfitted estimator
     with sklearn-compatible `.fit(X, y)` and `.predict(X) -> np.ndarray` methods.
 
+    ### Available packages (confirmed installed)
+    - **scikit-learn**: `GradientBoostingRegressor`, `RandomForestRegressor`,
+      `Ridge`, `Lasso`, `ElasticNet`, etc.
+      - For RMSE: use `np.sqrt(mean_squared_error(y_true, y_pred))`.
+        Do NOT use `mean_squared_error(..., squared=False)` — it is
+        unsupported in the installed scikit-learn version.
+    - **XGBoost**: `xgboost.XGBRegressor`
+      - Set `early_stopping_rounds` in the **constructor**, NOT in `.fit()`.
+      - Use `eval_set=[(X_val, y_val)]` in `.fit()` for early stopping.
+    - **LightGBM**: `lightgbm.LGBMRegressor`
+    - **CatBoost**: `catboost.CatBoostRegressor`
+    - **PyTorch**: for neural network models
+    - Do NOT use packages that are not listed above.
+
+    ### Monotonicity (critical for acceptance)
+    The MBS evaluation harness computes Spearman rank correlation between
+    predictions and **raw-scale** `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`
+    (after inverse-transform via `scaler.sav`). This must be **positive**.
+
+    To help ensure monotonicity:
+    - For XGBoost/LightGBM: use `monotone_constraints` to enforce positive
+      monotonicity on the refi-incentive feature column.
+    - For CatBoost: use `monotone_constraints`.
+    - Do NOT compute Spearman yourself — the scaffold handles it.
+    - For ensembles: verify that the blend does not reverse the monotonicity
+      of individual models.
+
     ### Constraints
     - Output range must be interpretable as SMM_DECIMAL in [0.0, 1.0]. The
       scaffold will clip predictions, but your model should naturally produce
@@ -210,10 +246,13 @@ component_spec:
       model, but NOT flatten rows into independent observations without
       CUSIP-level features.
     - Train/test split is performed BY THE SCAFFOLD (temporal on fh_effdt).
-      Do NOT call train_test_split inside your model code.
+      Do NOT call `train_test_split` inside your model code.
     - Prefer models that can produce calibrated probabilities or bounded
       outputs (e.g., GradientBoostingRegressor with loss='huber',
       neural net with sigmoid output, GAM with logit link).
+    - Keep model complexity reasonable for the panel size (~4.5M rows).
+      A 500-tree LightGBM on the full panel approaches the 1-hour time
+      limit. Start with 100–200 trees and tune from there.
 
   ScenarioValidator: |
     ## ScenarioValidator Specification
@@ -229,6 +268,88 @@ component_spec:
     3. Burnout check: for matched CUSIPs at identical rate_incentive but
        different burnout_index values, higher burnout should predict lower
        SMM_DECIMAL.
+
+  Workflow: |
+    ## Workflow Specification (MBS Prepayment)
+
+    The MBS scaffold (`rdagent.scenarios.mbs_prepayment.scaffold`) handles
+    the entire pipeline: data loading, date parsing, temporal train/test
+    split, model fitting, prediction clipping, submission writing,
+    scaler inverse-transform, and MBS evaluation harness scoring.
+
+    **Your `main.py` MUST delegate to the scaffold.** Do NOT re-implement
+    any of the above steps yourself.
+
+    ### Required main.py structure
+    ```python
+    import os
+    from rdagent.scenarios.mbs_prepayment.scaffold import run_scaffold_pipeline
+
+    # Import build_model from the LLM-generated model file
+    from model_xx import build_model  # adjust filename to actual model_*.py
+
+    if __name__ == "__main__":
+        data_dir = os.environ.get("DATA_DIR", ".")
+        result = run_scaffold_pipeline(
+            panel_path=os.path.join(data_dir, "tfminput.pkl"),
+            scaler_path=os.path.join(data_dir, "scaler.sav"),
+            model_builder=build_model,
+            output_dir=".",
+        )
+    ```
+
+    ### What the scaffold does (you MUST NOT re-implement)
+    - Loads `tfminput.pkl` (pickled DataFrame)
+    - Parses `fh_effdt` as integer YYYYMMDD via `format="%Y%m%d"`
+    - Validates the data contract (required columns, forbidden columns,
+      target range)
+    - Splits temporally at `fh_effdt <= 2024-10-31` (train) vs
+      `> 2024-10-31` (test) — NO random split, NO K-Fold
+    - Fits the model via `build_model().fit(X_train, y_train)`
+    - Clips predictions to [0, 1]
+    - Writes `submission.csv`, `scores.json`, `scores.csv`
+    - Computes per-coupon-bucket RMSE, Spearman monotonicity, regime-
+      transition RMSE, and all other MBS scorecard metrics
+
+    ### What you MUST NOT do
+    - Do NOT implement your own train/test split or date parsing
+    - Do NOT write your own `scores.csv` or `submission.csv` logic
+    - Do NOT implement debug mode, argparse, or data sampling
+    - Do NOT use `mean_squared_error(..., squared=False)` — use
+      `np.sqrt(mean_squared_error(...))` if you need RMSE anywhere
+    - Do NOT compute Spearman monotonicity yourself
+    - Do NOT call `train_test_split` from sklearn
+    - Do NOT parse `fh_effdt` with `pd.to_datetime(df["fh_effdt"])`
+      without `format="%Y%m%d"` — integers will be misinterpreted
+
+    ### What you CAN do
+    - Import model files dynamically (`model_*.py`)
+    - Pass the correct `build_model` callable to `run_scaffold_pipeline`
+    - Print progress messages with `print()` (NOT `logging` module)
+    - Handle multiple models by calling the scaffold once per model if
+      needed, but the ensemble strategy should be in `ensemble.py`
+
+  Ensemble: |
+    ## Ensemble Specification (MBS Prepayment)
+
+    Combine predictions from multiple prepayment models.
+
+    ### Requirements
+    - Each model in the ensemble MUST have a **distinct architecture**
+      (e.g., LightGBM + XGBoost + Ridge). Do NOT duplicate the same
+      model type — 3× LightGBM with different seeds is NOT an ensemble.
+    - Ensemble weights should be tuned on validation RMSE.
+    - Before finalizing: verify that the ensemble's Spearman correlation
+      with the refinance incentive feature is **positive** and at least
+      as good as the worst individual model's Spearman. A blend that
+      reverses monotonicity will be rejected.
+
+    ### Metric calculation
+    - Save per-model and ensemble validation scores to `scores.csv`.
+    - The metric column name must be `rmse_smm_decimal`.
+    - The index must include each model name and `"ensemble"` (lowercase).
+    - Use `np.sqrt(mean_squared_error(y_true, y_pred))` for RMSE.
+      Do NOT use `mean_squared_error(..., squared=False)`.
 
 # ---------------------------------------------------------------------------
 # Feedback evaluation schema (merged into exp_feedback output)

@@ -23,10 +23,12 @@ def synthetic_panel() -> pd.DataFrame:
     """Panel with GNMA feature names already normalized to mean 0 / std 1."""
     rng = np.random.default_rng(7)
     n = 2000
+    # fh_effdt is stored as integer YYYYMMDD in the real panel
+    dates = pd.date_range("2019-01-01", periods=n, freq="D")
     df = pd.DataFrame(
         {
             "cusip": [f"CU{i:04d}" for i in rng.integers(0, 80, n)],
-            "fh_effdt": pd.date_range("2019-01-01", periods=n, freq="D"),
+            "fh_effdt": dates.strftime("%Y%m%d").astype(int),
             "smm_decimal": np.clip(rng.uniform(0, 0.05, n), 0, 1),
         }
     )
@@ -75,8 +77,8 @@ def test_temporal_split_is_strictly_temporal(synthetic_panel):
     train, test = splitter.split(synthetic_panel)
     assert len(train) > 0
     assert len(test) > 0
-    assert pd.to_datetime(train["fh_effdt"]).max() <= pd.Timestamp("2023-01-01")
-    assert pd.to_datetime(test["fh_effdt"]).min() > pd.Timestamp("2023-01-01")
+    assert pd.to_datetime(train["fh_effdt"], format="%Y%m%d").max() <= pd.Timestamp("2023-01-01")
+    assert pd.to_datetime(test["fh_effdt"], format="%Y%m%d").min() > pd.Timestamp("2023-01-01")
 
 
 @pytest.mark.offline
