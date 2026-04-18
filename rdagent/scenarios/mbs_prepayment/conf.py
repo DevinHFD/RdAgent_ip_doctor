@@ -98,10 +98,33 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     macro_lag_days_min: int = 30
 
     # ------------------------------------------------------------------
-    # 3. Temporal train/test split
+    # 3. CUSIP-stratified train / val / test split
     # ------------------------------------------------------------------
     train_end_date: str = "2024-10-31"
-    embargo_months: int = 0
+    """Temporal cutoff for train and val rows (fh_effdt <= this date)."""
+    embargo_months: int = 0  # unused by MBSCUSIPSplit; kept for legacy callers
+
+    #: Fraction of all unique CUSIPs reserved for the fixed test set.
+    #: ≈ 1/7 ≈ 0.142857.  All time rows for these CUSIPs are held out.
+    test_cusip_fraction: float = 1.0 / 7.0
+
+    #: Fraction of the remaining CUSIPs used for validation (early-stopping,
+    #: model selection).  The rest form the training set.
+    val_cusip_fraction: float = 0.20
+
+    #: Fixed seed for CUSIP shuffle — same value every loop so all runs
+    #: compare on the identical test/val/train partition.
+    cusip_split_seed: int = 42
+
+    #: Column name carrying pool unpaid principal balance (used as sample
+    #: weight during training, capped at upb_weight_cap).
+    upb_weight_col: str = "fh_upb"
+
+    #: Hard cap on UPB weights (prevents very large pools from dominating).
+    upb_weight_cap: float = 150_000_000.0
+
+    #: Filename for the cross-loop test prediction history (appended each run).
+    test_predictions_filename: str = "test_predictions_history.csv"
 
     # ------------------------------------------------------------------
     # 4. Evaluation harness (Priority 1 - evaluation.py)

@@ -40,7 +40,7 @@ from .evaluation import MBSEvaluationHarness
 from .memory import IterationPhase, MBSMemory
 from .orchestration import DomainValidator, MBSOrchestrator, PhaseGate
 from .personas import PersonaRouter
-from .scaffold import GNMA_HARNESS_FEATURES, MBSDataContract, MBSTrainTestSplit
+from .scaffold import GNMA_HARNESS_FEATURES, MBSCUSIPSplit, MBSDataContract, MBSTrainTestSplit
 from .search_strategy import MBSSearchState, format_filter_for_prompt
 
 
@@ -90,12 +90,12 @@ class MBSPrepaymentScen(DataScienceScen):
         )
         self.model_output_channel = 1
         self.metric_description = (
-            "RMSE of SMM_DECIMAL on the temporal holdout (fh_effdt > "
-            f"{MBSP_SETTINGS.train_end_date}). The scaffold inverse-transforms "
-            "the GNMA features with scaler.sav before scoring, so reported "
-            "diagnostics are in raw units: per-coupon-bucket RMSE (on raw "
-            "WAC), S-curve R² and inflection point (vs raw "
-            "Avg_Prop_Refi_Incentive_WAC_30yr_2mos), and regime-transition "
+            f"RMSE of SMM_DECIMAL on the fixed test-CUSIP set (≈1/7 of all "
+            f"CUSIPs, all time rows, fixed seed={MBSP_SETTINGS.cusip_split_seed}). "
+            "The scaffold inverse-transforms the GNMA features with scaler.sav "
+            "before scoring, so reported diagnostics are in raw units: "
+            "per-coupon-bucket RMSE (on raw WAC), S-curve R² and inflection point "
+            "(vs raw Avg_Prop_Refi_Incentive_WAC_30yr_2mos), and regime-transition "
             "RMSE. A model that improves overall RMSE but degrades "
             "per-coupon uniformity or regime-transition RMSE is a REJECT. "
             "Current SOTA: MLP [10, 20, 10] hidden units, Leaky ReLU hidden "
@@ -105,8 +105,8 @@ class MBSPrepaymentScen(DataScienceScen):
         )
         self.submission_specifications = (
             f"Produce {MBSP_SETTINGS.submission_filename} with columns "
-            "(cusip, fh_effdt, smm_decimal_pred) covering every holdout row "
-            f"(fh_effdt > {MBSP_SETTINGS.train_end_date}). Predictions are "
+            "(cusip, fh_effdt, smm_decimal_pred) covering the test-CUSIP set "
+            f"(≈1/7 of all CUSIPs, fixed by seed={MBSP_SETTINGS.cusip_split_seed}). Predictions are "
             "automatically clipped to [0, 1] by the scaffold."
         )
         self.coder_longer_time_limit_required = False
@@ -134,10 +134,13 @@ class MBSPrepaymentScen(DataScienceScen):
             harness_raw_features=harness_raw,
             forbidden_columns=tuple(MBSP_SETTINGS.forbidden_columns_list()),
         )
-        self.mbs_splitter = MBSTrainTestSplit(
+        self.mbs_splitter = MBSCUSIPSplit(
             train_end_date=MBSP_SETTINGS.train_end_date,
             date_column=MBSP_SETTINGS.date_col,
-            embargo_months=MBSP_SETTINGS.embargo_months,
+            cusip_column=MBSP_SETTINGS.cusip_col,
+            test_fraction=MBSP_SETTINGS.test_cusip_fraction,
+            val_fraction=MBSP_SETTINGS.val_cusip_fraction,
+            random_seed=MBSP_SETTINGS.cusip_split_seed,
         )
         self.mbs_harness = MBSEvaluationHarness(
             coupon_buckets=MBSP_SETTINGS.coupon_buckets_list(),
@@ -240,14 +243,24 @@ class MBSPrepaymentScen(DataScienceScen):
             f"- Required GNMA features: {self.mbs_contract.required_columns}\n"
             f"- Forbidden (future-leaking) columns: "
             f"{self.mbs_contract.forbidden_columns}\n"
-            f"- Temporal split at {self.mbs_splitter.train_end_date} on "
-            f"{self.mbs_splitter.date_column} (embargo "
-            f"{self.mbs_splitter.embargo_months} months).\n"
+            f"- Split (seed={self.mbs_splitter.random_seed}, fixed every loop):\n"
+            f"    * Test CUSIPs  : {self.mbs_splitter.test_fraction:.4f} of all CUSIPs, "
+            "ALL time rows — identical across loops for fair comparison.\n"
+            f"    * Train CUSIPs : {1.0 - self.mbs_splitter.val_fraction:.0%} of remaining, "
+            f"fh_effdt ≤ {self.mbs_splitter.train_end_date}.\n"
+            f"    * Val CUSIPs   : {self.mbs_splitter.val_fraction:.0%} of remaining, "
+            f"fh_effdt ≤ {self.mbs_splitter.train_end_date} — for early stopping.\n"
+            "- The scaffold passes X_val / y_val to model.fit() so GBM early-stopping\n"
+            "  and PyTorch validation loops can consume them. Sklearn models that\n"
+            "  do not accept these kwargs fall back automatically.\n"
             "- Scoring: scaffold uses scaler.sav to inverse-transform GNMA "
             "features back to raw units (WAC in %, "
             "Avg_Prop_Refi_Incentive_WAC_30yr_2mos in raw incentive units, "
             "etc.) so the harness measures per-coupon RMSE, S-curve R², "
             "inflection point, and seasoning effects on the real scale.\n"
+            "- After each successful run the scaffold appends test-set predictions "
+            f"(loop_number, cusip, fh_effdt, fh_upb, smm_decimal, smm_decimal_pred) "
+            f"to `mbs_output/{MBSP_SETTINGS.test_predictions_filename}`.\n"
             f"- Submission: write `{MBSP_SETTINGS.submission_filename}` "
             "with (cusip, fh_effdt, smm_decimal_pred). Scaffold clips "
             "predictions to [0, 1]."

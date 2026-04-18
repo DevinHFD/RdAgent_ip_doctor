@@ -296,9 +296,10 @@ component_spec:
     ## Workflow Specification (MBS Prepayment)
 
     The MBS scaffold (`rdagent.scenarios.mbs_prepayment.scaffold`) handles
-    the entire pipeline: data loading, date parsing, temporal train/test
-    split, model fitting, prediction clipping, submission writing,
-    scaler inverse-transform, and MBS evaluation harness scoring.
+    the entire pipeline: data loading, date parsing, CUSIP-stratified
+    train/val/test split, model fitting, prediction clipping, submission
+    writing, scaler inverse-transform, MBS scorecard evaluation, and
+    appending test predictions to the cross-loop history file.
 
     **Your `main.py` MUST delegate to the scaffold.** Do NOT re-implement
     any of the above steps yourself.
@@ -326,23 +327,48 @@ component_spec:
     - Parses `fh_effdt` as integer YYYYMMDD via `format="%Y%m%d"`
     - Validates the data contract (required columns, forbidden columns,
       target range)
-    - Splits temporally at `fh_effdt <= 2024-10-31` (train) vs
-      `> 2024-10-31` (test) — NO random split, NO K-Fold
-    - Fits the model via `build_model().fit(X_train, y_train)`
+    - Splits by CUSIP with fixed seed=42 (same partition every loop):
+        * Test  (~1/7 of CUSIPs, ALL time rows) — evaluation target
+        * Train (80 % of remaining CUSIPs, fh_effdt ≤ 2024-10-31)
+        * Val   (20 % of remaining CUSIPs, fh_effdt ≤ 2024-10-31)
+    - Calls `model.fit(X_train, y_train, X_val=X_val, y_val=y_val,
+      sample_weight=min(fh_upb, 150M))` — see model interface below
     - Clips predictions to [0, 1]
     - Writes `submission.csv`, `scores.json`, `scores.csv`
     - Computes per-coupon-bucket RMSE, regime-transition RMSE, and all
       other MBS scorecard metrics
+    - Appends test-set rows (loop_number, cusip, fh_effdt, fh_upb,
+      smm_decimal, smm_decimal_pred) to `mbs_output/test_predictions_history.csv`
+
+    ### Model fit() interface
+    The scaffold calls your model as:
+    ```python
+    model.fit(X_train, y_train,
+              X_val=X_val, y_val=y_val,
+              sample_weight=train_weights)
+    ```
+    Your `build_model()` should return an object whose `fit()` accepts
+    these kwargs if you want to use early stopping or UPB weighting:
+    ```python
+    class MyModel:
+        def fit(self, X, y, X_val=None, y_val=None, sample_weight=None):
+            # Use X_val / y_val for early stopping
+            # Use sample_weight for weighted loss
+            ...
+        def predict(self, X):
+            ...
+    ```
+    Sklearn estimators that do not accept `X_val` / `y_val` fall back
+    to `fit(X_train, y_train, sample_weight=...)` automatically.
 
     ### What you MUST NOT do
-    - Do NOT implement your own train/test split or date parsing
+    - Do NOT implement your own train/val/test split or date parsing
     - Do NOT write your own `scores.csv` or `submission.csv` logic
     - Do NOT implement debug mode, argparse, or data sampling
     - Do NOT use `mean_squared_error(..., squared=False)` — use
       `np.sqrt(mean_squared_error(...))` if you need RMSE anywhere
     - Do NOT call `train_test_split` from sklearn
-    - Do NOT parse `fh_effdt` with `pd.to_datetime(df["fh_effdt"])`
-      without `format="%Y%m%d"` — integers will be misinterpreted
+    - Do NOT parse `fh_effdt` without `format="%Y%m%d"`
 
     ### What you CAN do
     - Import model files dynamically (`model_*.py`)

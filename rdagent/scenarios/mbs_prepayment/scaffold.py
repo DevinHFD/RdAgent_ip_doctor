@@ -23,12 +23,23 @@ The coder plugs in one LLM-controlled callable::
 
     build_model() -> sklearn-compatible estimator with .fit/.predict
 
-Loading, temporal splitting, scaler inverse-transform, prediction clipping,
-submission writing, and MBS scorecard evaluation are all scaffold code —
-the LLM cannot modify them.
+Loading, CUSIP-stratified splitting, scaler inverse-transform, prediction
+clipping, submission writing, and MBS scorecard evaluation are all scaffold
+code — the LLM cannot modify them.
+
+Split design (fixed by seed, enforced by scaffold):
+    - Test CUSIPs  : 1/7 of all unique CUSIPs, sampled with seed=42.
+                     ALL time rows for these CUSIPs are held out.
+    - Train CUSIPs : 80 % of remaining CUSIPs, rows with
+                     fh_effdt <= train_end_date.
+    - Val CUSIPs   : 20 % of remaining CUSIPs, rows with
+                     fh_effdt <= train_end_date.
+    Scoring is on the fixed test-CUSIP set every iteration, so all loops
+    are directly comparable.
 """
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -131,13 +142,124 @@ class MBSContractViolation(ValueError):
 
 
 # ---------------------------------------------------------------------------
-# Temporal train/test split
+# CUSIP-stratified train / val / test split
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MBSCUSIPSplit:
+    """Fixed CUSIP-stratified three-way split enforced by the scaffold.
+
+    Partition design (all random choices use ``random_seed`` for
+    reproducibility across loops):
+
+    * **Test CUSIPs** (``test_fraction`` ≈ 1/7 of all CUSIPs):
+      ALL time rows — holds out entire pools so every loop scores on
+      exactly the same observations.
+    * **Train CUSIPs** (80 % of the remaining CUSIPs):
+      Only rows with ``fh_effdt <= train_end_date``.
+    * **Val CUSIPs** (20 % of the remaining CUSIPs):
+      Only rows with ``fh_effdt <= train_end_date`` — used by models for
+      early stopping / hyperparameter selection.
+
+    The scaffold passes ``X_val`` / ``y_val`` to ``model.fit()`` via
+    keyword arguments so GBM early-stopping and PyTorch validation loops
+    can consume them.  Sklearn models that do not accept these kwargs
+    fall back to ``fit(X_train, y_train)`` automatically.
+    """
+
+    train_end_date: str = "2024-10-31"
+    date_column: str = "fh_effdt"
+    cusip_column: str = "cusip"
+    test_fraction: float = 1.0 / 7.0
+    val_fraction: float = 0.20
+    random_seed: int = 42
+
+    def split(
+        self, df: pd.DataFrame
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Return (train_df, val_df, test_df).
+
+        * train_df : train_cusips  ×  fh_effdt <= cutoff
+        * val_df   : val_cusips    ×  fh_effdt <= cutoff
+        * test_df  : test_cusips   ×  ALL rows
+        """
+        if self.date_column not in df.columns:
+            raise MBSContractViolation(
+                f"Split date column '{self.date_column}' missing from panel."
+            )
+        if self.cusip_column not in df.columns:
+            raise MBSContractViolation(
+                f"Split CUSIP column '{self.cusip_column}' missing from panel."
+            )
+        # fh_effdt is stored as integer YYYYMMDD in the panel pickle.
+        dates = pd.to_datetime(df[self.date_column], format="%Y%m%d", errors="coerce")
+        n_nat = dates.isna().sum()
+        if n_nat > 0:
+            raise MBSContractViolation(
+                f"{n_nat} rows have unparseable {self.date_column} values "
+                f"(expected integer YYYYMMDD). Check the panel data."
+            )
+
+        # Sorted unique CUSIPs → deterministic base ordering before shuffle.
+        all_cusips = np.array(sorted(df[self.cusip_column].unique()))
+        rng = np.random.default_rng(self.random_seed)
+        shuffled = all_cusips.copy()
+        rng.shuffle(shuffled)
+
+        n_total = len(shuffled)
+        n_test = max(1, round(n_total * self.test_fraction))
+        test_cusips = set(shuffled[:n_test])
+        remaining = shuffled[n_test:]
+
+        n_val = max(1, round(len(remaining) * self.val_fraction))
+        val_cusips = set(remaining[:n_val])
+        train_cusips = set(remaining[n_val:])
+
+        cutoff = pd.Timestamp(self.train_end_date)
+        temporal_mask = (dates <= cutoff).to_numpy()
+        cusip_arr = df[self.cusip_column].to_numpy()
+
+        train_mask = np.isin(cusip_arr, list(train_cusips)) & temporal_mask
+        val_mask = np.isin(cusip_arr, list(val_cusips)) & temporal_mask
+        test_mask = np.isin(cusip_arr, list(test_cusips))
+
+        train_df = df[train_mask].copy()
+        val_df = df[val_mask].copy()
+        test_df = df[test_mask].copy()
+
+        if len(train_df) == 0:
+            raise MBSContractViolation(
+                "CUSIP split produced an empty train set — check train_end_date "
+                f"({self.train_end_date}) and random_seed ({self.random_seed})."
+            )
+        if len(test_df) == 0:
+            raise MBSContractViolation(
+                "CUSIP split produced an empty test set — check test_fraction "
+                f"({self.test_fraction}) and the number of unique CUSIPs."
+            )
+        return train_df, val_df, test_df
+
+    # Keep a thin shim so old callers that expect a 2-tuple still work.
+    def split_train_test(
+        self, df: pd.DataFrame
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        train_df, _val_df, test_df = self.split(df)
+        return train_df, test_df
+
+
+# ---------------------------------------------------------------------------
+# Legacy temporal splitter (kept for backward compatibility / tests)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class MBSTrainTestSplit:
-    """Fixed temporal split on fh_effdt. LLM cannot override."""
+    """Simple temporal split — superseded by MBSCUSIPSplit.
+
+    Kept for backward compatibility; the scaffold pipeline now uses
+    ``MBSCUSIPSplit`` by default.
+    """
 
     train_end_date: str = "2024-10-31"
     date_column: str = "fh_effdt"
@@ -148,10 +270,6 @@ class MBSTrainTestSplit:
             raise MBSContractViolation(
                 f"Split date column '{self.date_column}' missing from panel."
             )
-        # fh_effdt is stored as integer YYYYMMDD (e.g., 20241031) in the
-        # panel pickle.  Plain pd.to_datetime(..., errors="coerce") would
-        # interpret these integers as nanoseconds-since-epoch (a date in
-        # 1970), producing NaT or wrong dates and causing empty holdout sets.
         dates = pd.to_datetime(df[self.date_column], format="%Y%m%d", errors="coerce")
         n_nat = dates.isna().sum()
         if n_nat > 0:
@@ -213,7 +331,6 @@ def inverse_transform_features(
             out_cols[f] = df[f].to_numpy(dtype=float) * scale_[i] + mean_[i]
         return pd.DataFrame(out_cols, index=df.index)
     if hasattr(scaler, "inverse_transform") and feature_names_in:
-        # Fall back to full-matrix inverse_transform using the scaler's known columns.
         known = [c for c in feature_names_in if c in df.columns]
         if not known:
             raise MBSContractViolation(
@@ -246,6 +363,56 @@ def clip_predictions(y_pred: np.ndarray, contract: MBSDataContract) -> np.ndarra
 
 
 # ---------------------------------------------------------------------------
+# Test-prediction history (appended each loop)
+# ---------------------------------------------------------------------------
+
+_HISTORY_COLUMNS = ["loop_number", "cusip", "fh_effdt", "fh_upb", "smm_decimal", "smm_decimal_pred"]
+
+
+def _append_test_predictions(
+    output_dir: Path,
+    test_df: pd.DataFrame,
+    y_pred: np.ndarray,
+    contract: MBSDataContract,
+    filename: str = "test_predictions_history.csv",
+) -> Path:
+    """Append this loop's test-set predictions to the shared history file.
+
+    The file accumulates one block of rows per successful loop so downstream
+    analysis can compare model evolution over multiple iterations.
+
+    Columns written:
+        loop_number, cusip, fh_effdt, fh_upb, smm_decimal, smm_decimal_pred
+    """
+    out_path = output_dir / filename
+
+    # Determine loop number from existing file (auto-increment).
+    loop_num = 1
+    if out_path.exists() and out_path.stat().st_size > 0:
+        try:
+            existing = pd.read_csv(out_path, usecols=["loop_number"])
+            if len(existing) > 0:
+                loop_num = int(existing["loop_number"].max()) + 1
+        except Exception:
+            pass
+
+    # Collect available columns from test_df.
+    record = test_df.reset_index(drop=True).copy()
+    cols_to_keep = [c for c in [contract.cusip_col, contract.date_col, "fh_upb", contract.target_col] if c in record.columns]
+    record = record[cols_to_keep].copy()
+    record["smm_decimal_pred"] = y_pred
+    record.insert(0, "loop_number", loop_num)
+
+    # Rename to canonical column names for the history file.
+    rename = {contract.cusip_col: "cusip", contract.date_col: "fh_effdt", contract.target_col: "smm_decimal"}
+    record = record.rename(columns=rename)
+
+    write_header = not (out_path.exists() and out_path.stat().st_size > 0)
+    record.to_csv(out_path, mode="a", header=write_header, index=False)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # Workflow orchestration
 # ---------------------------------------------------------------------------
 
@@ -255,16 +422,66 @@ class MBSWorkflow:
     """Fixed workflow: load → validate → split → fit → predict → clip.
 
     The LLM only provides ``model_builder()`` returning a fresh, unfitted
-    estimator with ``.fit(X, y)`` and ``.predict(X)``. Features are
-    pre-built and pre-normalized — no feature-engineering hook.
+    estimator with ``.fit(X, y, **kwargs)`` and ``.predict(X)``.
+
+    The scaffold calls::
+
+        model.fit(X_train, y_train,
+                  X_val=X_val, y_val=y_val,
+                  sample_weight=train_weights)
+
+    Keyword arguments are passed through gracefully — models that accept
+    ``X_val`` / ``y_val`` (PyTorch loops, custom early-stopping wrappers)
+    use them; sklearn models that do not accept them fall back automatically.
+
+    ``sample_weight`` is set to ``min(fh_upb, 150e6)`` when the ``fh_upb``
+    column is present in the panel, matching the SOTA UPB-weighted loss.
     """
 
     contract: MBSDataContract = field(default_factory=MBSDataContract)
-    splitter: MBSTrainTestSplit = field(default_factory=MBSTrainTestSplit)
+    splitter: MBSCUSIPSplit = field(default_factory=MBSCUSIPSplit)
+    #: UPB weight cap (matching SOTA model: 150 M).
+    upb_weight_cap: float = 150e6
+    #: Column name for pool unpaid principal balance (weight source).
+    upb_col: str = "fh_upb"
 
     def _feature_columns(self, df: pd.DataFrame) -> list[str]:
         drop = {self.contract.cusip_col, self.contract.date_col, self.contract.target_col}
         return [c for c in df.columns if c not in drop]
+
+    def _fit_model(
+        self,
+        model: Any,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        sample_weight: np.ndarray | None,
+    ) -> None:
+        """Call model.fit with progressive kwarg fallback."""
+        fit_kwargs: dict[str, Any] = {}
+        if len(X_val) > 0:
+            fit_kwargs["X_val"] = X_val
+            fit_kwargs["y_val"] = y_val
+        if sample_weight is not None:
+            fit_kwargs["sample_weight"] = sample_weight
+
+        if not fit_kwargs:
+            model.fit(X_train, y_train)
+            return
+
+        # Try full kwargs first; fall back step-by-step on TypeError.
+        for attempt_kwargs in [
+            fit_kwargs,
+            {k: v for k, v in fit_kwargs.items() if k == "sample_weight"},
+            {},
+        ]:
+            try:
+                model.fit(X_train, y_train, **attempt_kwargs)
+                return
+            except TypeError:
+                if not attempt_kwargs:
+                    raise
 
     def run(
         self,
@@ -272,20 +489,25 @@ class MBSWorkflow:
         model_builder: Callable[[], Any],
     ) -> dict[str, Any]:
         self.contract.validate(panel, include_target=True)
-        train_df, test_df = self.splitter.split(panel)
-        if len(train_df) == 0 or len(test_df) == 0:
-            raise MBSContractViolation(
-                f"Split produced empty partition: train={len(train_df)}, "
-                f"test={len(test_df)}. Check train_end_date={self.splitter.train_end_date}."
-            )
+        train_df, val_df, test_df = self.splitter.split(panel)
+
         feat_cols = self._feature_columns(panel)
         X_train = train_df[feat_cols].to_numpy(dtype=float)
         y_train = train_df[self.contract.target_col].to_numpy(dtype=float)
+        X_val = val_df[feat_cols].to_numpy(dtype=float) if len(val_df) > 0 else np.empty((0, len(feat_cols)))
+        y_val = val_df[self.contract.target_col].to_numpy(dtype=float) if len(val_df) > 0 else np.empty(0)
         X_test = test_df[feat_cols].to_numpy(dtype=float)
         y_test = test_df[self.contract.target_col].to_numpy(dtype=float)
 
+        # UPB-weighted sample_weight for training (SOTA convention).
+        sample_weight: np.ndarray | None = None
+        if self.upb_col in train_df.columns:
+            sample_weight = np.minimum(
+                train_df[self.upb_col].to_numpy(dtype=float), self.upb_weight_cap
+            )
+
         model = model_builder()
-        model.fit(X_train, y_train)
+        self._fit_model(model, X_train, y_train, X_val, y_val, sample_weight)
         y_pred = clip_predictions(model.predict(X_test), self.contract)
 
         submission = pd.DataFrame(
@@ -299,6 +521,8 @@ class MBSWorkflow:
             "model": model,
             "y_true": y_test,
             "y_pred": y_pred,
+            "train_df": train_df,
+            "val_df": val_df,
             "test_df": test_df,
             "feature_columns": feat_cols,
             "submission": submission,
@@ -316,7 +540,8 @@ def run_scaffold_pipeline(
     model_builder: Callable[[], Any],
     output_dir: str | Path,
     contract: MBSDataContract | None = None,
-    splitter: MBSTrainTestSplit | None = None,
+    splitter: MBSCUSIPSplit | None = None,
+    history_output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """End-to-end scaffold entry for the Workflow component's ``main.py``.
 
@@ -324,9 +549,10 @@ def run_scaffold_pipeline(
     - ``scaler_path``: ``scaler.sav`` path (joblib).
     - ``model_builder``: LLM-provided callable returning an unfitted model.
     - ``output_dir``: workspace output root. Writes ``submission.csv``
-      (normalized test rows + predictions), ``scores.json`` (full MBS
-      scorecard computed on raw-scale GNMA features via the scaler), and
-      ``scores.csv`` (primary metric bridged for the DS runner).
+      (test-CUSIP rows + predictions), ``scores.json`` (full MBS scorecard),
+      and ``scores.csv`` (primary metric for the DS runner).
+    - ``history_output_dir``: where to write the cross-loop test predictions
+      history file.  Defaults to ``./mbs_output`` next to the workspace.
     """
     from rdagent.scenarios.mbs_prepayment.evaluation import (
         MBSEvaluationHarness,
@@ -336,6 +562,12 @@ def run_scaffold_pipeline(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resolve history output directory (default: ./mbs_output relative to cwd).
+    if history_output_dir is None:
+        history_output_dir = Path("./mbs_output")
+    history_output_dir = Path(history_output_dir)
+    history_output_dir.mkdir(parents=True, exist_ok=True)
+
     panel = pd.read_pickle(panel_path)
     if not isinstance(panel, pd.DataFrame):
         raise MBSContractViolation(
@@ -343,9 +575,10 @@ def run_scaffold_pipeline(
         )
     scaler = _load_scaler(Path(scaler_path))
 
+    used_contract = contract or MBSDataContract()
     workflow = MBSWorkflow(
-        contract=contract or MBSDataContract(),
-        splitter=splitter or MBSTrainTestSplit(),
+        contract=used_contract,
+        splitter=splitter or MBSCUSIPSplit(),
     )
     result = workflow.run(panel, model_builder)
 
@@ -353,8 +586,7 @@ def run_scaffold_pipeline(
     submission_path = output_dir / "submission.csv"
     result["submission"].to_csv(submission_path, index=False)
 
-    # Harness needs raw-scale GNMA features — inverse-transform and assemble
-    # a feature frame carrying cusip/fh_effdt + raw-scale metadata.
+    # Harness needs raw-scale GNMA features — inverse-transform and assemble.
     test_df: pd.DataFrame = result["test_df"]
     raw_feats = inverse_transform_features(
         test_df, scaler, workflow.contract.harness_raw_features
@@ -378,4 +610,18 @@ def run_scaffold_pipeline(
         index=pd.Index(["ensemble"], name=""),
     ).to_csv(output_dir / "scores.csv")
 
-    return {"result": result, "scorecard": scorecard, "submission_path": str(submission_path)}
+    # Append test predictions to the cross-loop history file.
+    history_path = _append_test_predictions(
+        history_output_dir,
+        test_df,
+        result["y_pred"],
+        used_contract,
+    )
+    print(f"[scaffold] Test predictions appended to {history_path}")
+
+    return {
+        "result": result,
+        "scorecard": scorecard,
+        "submission_path": str(submission_path),
+        "history_path": str(history_path),
+    }
