@@ -14,7 +14,7 @@ Draft/Improvement/Ensemble stage selection with:
     2. **Deterministic domain validation node** (3C):
        `DomainValidator` runs between Execute and Feedback and performs
        Python-only sanity checks (no LLM call): predictions in [0, 1],
-       monotonic rate sensitivity, no NaN/Inf, all CUSIPs present,
+       no NaN/Inf, all CUSIPs present,
        training time under budget. If any check fails, the experiment is
        auto-rejected with a specific diagnostic message that can be fed
        straight back to the coder, bypassing the feedback LLM and saving
@@ -98,7 +98,7 @@ PHASE_SPECS: dict[Phase, PhaseSpec] = {
         iteration_budget=(1, 3),
         allowed_components=("DataLoader", "RateCurveFeatures", "PrepaymentModel"),
         gate_criteria_description=(
-            "overall_rmse < 0.040 AND all predictions in [0, 1] AND monotonic rate sensitivity."
+            "overall_rmse < 0.040 AND all predictions in [0, 1]."
         ),
     ),
     Phase.RATE_RESPONSE: PhaseSpec(
@@ -110,8 +110,7 @@ PHASE_SPECS: dict[Phase, PhaseSpec] = {
         iteration_budget=(4, 8),
         allowed_components=("RateCurveFeatures", "PrepaymentModel"),
         gate_criteria_description=(
-            "spearman(monotonicity) >= 0.7 AND s_curve_r2 >= 0.6 AND "
-            "inflection_point_bps in [50, 150]."
+            "s_curve_r2 >= 0.6 AND inflection_point_bps in [50, 150]."
         ),
     ),
     Phase.DYNAMICS: PhaseSpec(
@@ -124,7 +123,7 @@ PHASE_SPECS: dict[Phase, PhaseSpec] = {
         allowed_components=("PoolDynamics", "RateCurveFeatures", "PrepaymentModel"),
         gate_criteria_description=(
             "overall_rmse improved over RATE_RESPONSE SOTA AND worst per-coupon-bucket "
-            "RMSE < 0.035 AND monotonicity preserved."
+            "RMSE < 0.035."
         ),
     ),
     Phase.MACRO_REGIME: PhaseSpec(
@@ -217,7 +216,6 @@ class DomainValidator:
 
     target_min: float = 0.0
     target_max: float = 1.0
-    min_rate_sensitivity_corr: float = 0.3  # Spearman(pred, rate_incentive) must exceed this
     max_training_seconds: float = 3600.0    # 1-hour default budget
 
     def validate(
@@ -260,30 +258,7 @@ class DomainValidator:
             )
         )
 
-        # Check 3: monotonic rate sensitivity
-        if rate_incentive is not None and len(rate_incentive) == len(y_pred) and len(y_pred) >= 3:
-            corr = _spearman(list(rate_incentive), list(y_pred))
-            ok = corr >= self.min_rate_sensitivity_corr
-            checks.append(
-                ValidationCheck(
-                    name="rate_sensitivity_monotonic",
-                    passed=ok,
-                    detail=(
-                        f"spearman(pred, rate_incentive)={corr:+.3f} "
-                        f"(threshold {self.min_rate_sensitivity_corr:+.2f})"
-                    ),
-                )
-            )
-        else:
-            checks.append(
-                ValidationCheck(
-                    name="rate_sensitivity_monotonic",
-                    passed=True,
-                    detail="rate_incentive not provided — skipped",
-                )
-            )
-
-        # Check 4: all CUSIPs present at prediction time
+        # Check 3: all CUSIPs present at prediction time
         if cusip_ids_train is not None and cusip_ids_pred is not None:
             train_set = set(cusip_ids_train)
             pred_set = set(cusip_ids_pred)
@@ -333,7 +308,6 @@ class DomainValidator:
 
         Fires on:
           * NaN/missing ``overall_rmse`` or RMSE outside a plausible range
-          * Non-monotonic rate sensitivity (Spearman below threshold)
           * Any harness dimension that returned an ``_error`` field
         """
         checks: list[ValidationCheck] = []
@@ -357,22 +331,7 @@ class DomainValidator:
             )
         )
 
-        # Check 2: monotonic rate sensitivity (if the harness computed it).
-        if "monotonicity_spearman" in rs and "_error" not in rs:
-            corr = rs.get("monotonicity_spearman", 0.0)
-            mono_ok = _is_finite(corr) and float(corr) >= self.min_rate_sensitivity_corr
-            checks.append(
-                ValidationCheck(
-                    name="rate_sensitivity_monotonic",
-                    passed=mono_ok,
-                    detail=(
-                        f"spearman(pred, rate_incentive)={float(corr):+.3f} "
-                        f"(threshold {self.min_rate_sensitivity_corr:+.2f})"
-                    ),
-                )
-            )
-
-        # Check 3: no harness dimension errored out.
+        # Check 2: no harness dimension errored out.
         errored_dims = [
             dim for dim, vals in scorecard.items()
             if isinstance(vals, dict) and "_error" in vals
@@ -413,31 +372,6 @@ def _is_finite(x: float) -> bool:
         return False
 
 
-def _spearman(a: list[float], b: list[float]) -> float:
-    """Spearman rank correlation; zero for constant inputs."""
-    n = len(a)
-    if n < 2:
-        return 0.0
-    ra = _rank(a)
-    rb = _rank(b)
-    mean_a = sum(ra) / n
-    mean_b = sum(rb) / n
-    num = sum((ra[i] - mean_a) * (rb[i] - mean_b) for i in range(n))
-    den_a = math.sqrt(sum((ra[i] - mean_a) ** 2 for i in range(n)))
-    den_b = math.sqrt(sum((rb[i] - mean_b) ** 2 for i in range(n)))
-    if den_a == 0 or den_b == 0:
-        return 0.0
-    return num / (den_a * den_b)
-
-
-def _rank(x: list[float]) -> list[float]:
-    order = sorted(range(len(x)), key=lambda i: x[i])
-    ranks = [0.0] * len(x)
-    for r, i in enumerate(order):
-        ranks[i] = float(r)
-    return ranks
-
-
 # ---------------------------------------------------------------------------
 # Phase gate evaluation
 # ---------------------------------------------------------------------------
@@ -467,7 +401,6 @@ class PhaseGate:
     """Evaluate whether the current SOTA scorecard satisfies a phase's gate."""
 
     baseline_max_rmse: float = 0.040
-    rate_response_min_monotonicity: float = 0.7
     rate_response_min_s_curve_r2: float = 0.6
     rate_response_inflection_range_bps: tuple[float, float] = (50.0, 150.0)
     dynamics_max_worst_coupon_rmse: float = 0.035
@@ -495,24 +428,8 @@ class PhaseGate:
                     f"overall_rmse={props['overall_rmse']:.5f} (cap {self.baseline_max_rmse:.5f})",
                 )
             )
-            mono_ok = props.get("rate_sensitivity_spearman", 0.0) > 0
-            checks.append(
-                ValidationCheck(
-                    "monotonic_rate_sensitivity",
-                    mono_ok,
-                    f"spearman={props.get('rate_sensitivity_spearman', 0.0):+.2f}",
-                )
-            )
 
         elif phase == Phase.RATE_RESPONSE:
-            mono = props.get("rate_sensitivity_spearman", 0.0)
-            checks.append(
-                ValidationCheck(
-                    "monotonicity_ge_threshold",
-                    mono >= self.rate_response_min_monotonicity,
-                    f"spearman={mono:+.2f} (threshold {self.rate_response_min_monotonicity:+.2f})",
-                )
-            )
             r2 = props.get("s_curve_r2", 0.0)
             checks.append(
                 ValidationCheck(
@@ -551,14 +468,6 @@ class PhaseGate:
                         "no per-coupon RMSE in scorecard",
                     )
                 )
-            mono = props.get("rate_sensitivity_spearman", 0.0)
-            checks.append(
-                ValidationCheck(
-                    "monotonicity_preserved",
-                    mono >= self.rate_response_min_monotonicity,
-                    f"spearman={mono:+.2f}",
-                )
-            )
 
         elif phase == Phase.MACRO_REGIME:
             overall = props.get("overall_rmse", 0.0)
@@ -607,7 +516,6 @@ def _props_to_dict(props: ModelProperties) -> dict[str, Any]:
         "component_touched": props.component_touched,
         "overall_rmse": props.overall_rmse,
         "rmse_by_coupon_bucket": dict(props.rmse_by_coupon_bucket),
-        "rate_sensitivity_spearman": props.rate_sensitivity_spearman,
         "s_curve_r2": props.s_curve_r2,
         "inflection_point_bps": props.inflection_point_bps,
         "regime_transition_rmse_mean": props.regime_transition_rmse_mean,

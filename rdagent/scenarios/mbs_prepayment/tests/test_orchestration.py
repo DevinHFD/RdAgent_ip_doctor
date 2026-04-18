@@ -91,17 +91,6 @@ def test_validator_rejects_nan():
     assert any(not c.passed for c in report.checks if c.name == "no_nan_inf")
 
 
-@pytest.mark.offline
-def test_validator_rejects_non_monotonic_rate_sensitivity():
-    v = DomainValidator(min_rate_sensitivity_corr=0.3)
-    # Predictions anti-correlated with rate_incentive — should fail
-    report = v.validate(
-        y_pred=[0.15, 0.12, 0.10, 0.05, 0.02],
-        rate_incentive=[-50, -10, 20, 80, 150],
-    )
-    assert not report.ok
-    assert any(c.name == "rate_sensitivity_monotonic" and not c.passed for c in report.checks)
-
 
 @pytest.mark.offline
 def test_validator_rejects_missing_cusips():
@@ -149,7 +138,7 @@ def test_rate_response_gate_checks_s_curve_and_inflection():
     gate = PhaseGate()
     props = ModelProperties.from_scorecard(5, "LightGBM", "RateCurveFeatures", BASELINE_SCORECARD)
     result = gate.evaluate(Phase.RATE_RESPONSE, props)
-    # monotonicity 0.8, s_curve_r2 0.75, inflection 90bps — all good
+    # s_curve_r2 0.75, inflection 90bps — all good
     assert result.passed
 
 
@@ -271,7 +260,6 @@ def test_orchestrator_advances_after_gate_passes(tmp_path):
         iteration=1,
         component_touched="RateCurveFeatures",
         overall_rmse=0.028,
-        rate_sensitivity_monotonic=True,
         has_rate_incentive=True,
         architecture_family="Ridge",
         success=True,

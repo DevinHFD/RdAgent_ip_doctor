@@ -8,8 +8,7 @@ Three mechanisms:
 
     1. Dependency gating: A hypothesis targeting component X is only allowed if
        its prerequisites have been met. For example, burnout hypotheses are
-       blocked until `rate_incentive` is present AND the model shows monotonic
-       rate sensitivity. Ensemble hypotheses are blocked until at least 3
+       blocked until `rate_incentive` is present. Ensemble hypotheses are blocked until at least 3
        distinct successful architectures exist.
 
     2. Adaptive exploration radius: track improvement velocity. If the last N
@@ -54,10 +53,10 @@ class MBSComponent(str, Enum):
 COMPONENT_PREREQUISITES: dict[str, list[str]] = {
     "RateCurveFeatures": [],
     "DataLoader": [],
-    "PoolDynamics": ["rate_incentive_present", "rate_sensitivity_monotonic"],
+    "PoolDynamics": ["rate_incentive_present"],
     "MacroFeatures": ["rate_incentive_present"],
     "PrepaymentModel": ["rate_incentive_present"],
-    "ScenarioValidator": ["rate_sensitivity_monotonic"],
+    "ScenarioValidator": [],
     "Ensemble": ["n_distinct_architectures_ge_3"],
 }
 
@@ -67,7 +66,6 @@ class IterationRecord:
     iteration: int
     component_touched: str
     overall_rmse: float
-    rate_sensitivity_monotonic: bool
     has_rate_incentive: bool
     architecture_family: str
     success: bool
@@ -123,19 +121,11 @@ class MBSSearchState:
     def has_rate_incentive(self) -> bool:
         return any(r.has_rate_incentive for r in self.history if r.success)
 
-    def rate_sensitivity_monotonic(self) -> bool:
-        recent_successes = [r for r in self.history if r.success]
-        if not recent_successes:
-            return False
-        return recent_successes[-1].rate_sensitivity_monotonic
-
     # --- Prerequisite evaluation -----------------------------------------
 
     def check_prerequisite(self, prereq: str) -> bool:
         if prereq == "rate_incentive_present":
             return self.has_rate_incentive()
-        if prereq == "rate_sensitivity_monotonic":
-            return self.rate_sensitivity_monotonic()
         if prereq == "n_distinct_architectures_ge_3":
             return self.distinct_architectures() >= 3
         return False
@@ -151,7 +141,6 @@ class MBSSearchState:
                     "iteration": r.iteration,
                     "component_touched": r.component_touched,
                     "overall_rmse": r.overall_rmse,
-                    "rate_sensitivity_monotonic": r.rate_sensitivity_monotonic,
                     "has_rate_incentive": r.has_rate_incentive,
                     "architecture_family": r.architecture_family,
                     "success": r.success,

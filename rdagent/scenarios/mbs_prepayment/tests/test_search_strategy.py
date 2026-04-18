@@ -31,30 +31,12 @@ def test_initial_mode_is_exploration():
 
 
 @pytest.mark.offline
-def test_after_rate_incentive_added_pool_dynamics_still_blocked_without_monotonicity():
+def test_after_rate_incentive_added_pool_dynamics_allowed():
     state = MBSSearchState()
     state.append(IterationRecord(
         iteration=1,
         component_touched="RateCurveFeatures",
         overall_rmse=0.03,
-        rate_sensitivity_monotonic=False,
-        has_rate_incentive=True,
-        architecture_family="Ridge",
-        success=True,
-    ))
-    filt = decide_next_iteration(state)
-    # PoolDynamics needs BOTH rate_incentive AND monotonicity
-    assert "PoolDynamics" in filt.blocked_components
-
-
-@pytest.mark.offline
-def test_after_monotonic_rate_sensitivity_pool_dynamics_allowed():
-    state = MBSSearchState()
-    state.append(IterationRecord(
-        iteration=1,
-        component_touched="RateCurveFeatures",
-        overall_rmse=0.03,
-        rate_sensitivity_monotonic=True,
         has_rate_incentive=True,
         architecture_family="Ridge",
         success=True,
@@ -71,7 +53,6 @@ def test_ensemble_blocked_until_three_distinct_architectures():
             iteration=i,
             component_touched="PrepaymentModel",
             overall_rmse=0.03 - i*0.001,
-            rate_sensitivity_monotonic=True,
             has_rate_incentive=True,
             architecture_family=arch,
             success=True,
@@ -84,7 +65,6 @@ def test_ensemble_blocked_until_three_distinct_architectures():
         iteration=3,
         component_touched="PrepaymentModel",
         overall_rmse=0.027,
-        rate_sensitivity_monotonic=True,
         has_rate_incentive=True,
         architecture_family="MLP",
         success=True,
@@ -102,7 +82,7 @@ def test_exploitation_mode_when_improving():
             iteration=i,
             component_touched="PrepaymentModel",
             overall_rmse=r,
-            rate_sensitivity_monotonic=True,
+    
             has_rate_incentive=True,
             architecture_family="LightGBM",
             success=True,
@@ -120,7 +100,7 @@ def test_exploration_mode_when_stalled():
             iteration=i,
             component_touched="FeatureEng",
             overall_rmse=r,
-            rate_sensitivity_monotonic=True,
+    
             has_rate_incentive=True,
             architecture_family="LightGBM",
             success=True,
@@ -136,14 +116,14 @@ def test_backtrack_after_k_consecutive_failures():
     # One success to establish a baseline RMSE
     state.append(IterationRecord(
         iteration=1, component_touched="PrepaymentModel",
-        overall_rmse=0.02, rate_sensitivity_monotonic=True,
+        overall_rmse=0.02,
         has_rate_incentive=True, architecture_family="Ridge", success=True,
     ))
     # Three failed iterations touching the same component
     for i in range(2, 5):
         state.append(IterationRecord(
             iteration=i, component_touched="PrepaymentModel",
-            overall_rmse=0.025, rate_sensitivity_monotonic=True,
+            overall_rmse=0.025,
             has_rate_incentive=True, architecture_family="Ridge", success=False,
         ))
     filt = decide_next_iteration(state)
@@ -167,7 +147,7 @@ def test_save_and_load_round_trip(tmp_path):
     state = MBSSearchState()
     state.append(IterationRecord(
         iteration=1, component_touched="RateCurveFeatures",
-        overall_rmse=0.025, rate_sensitivity_monotonic=True,
+        overall_rmse=0.025,
         has_rate_incentive=True, architecture_family="Ridge", success=True,
     ))
     path = tmp_path / "state.json"

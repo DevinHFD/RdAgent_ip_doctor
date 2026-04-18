@@ -94,11 +94,10 @@ class MBSPrepaymentScen(DataScienceScen):
             f"{MBSP_SETTINGS.train_end_date}). The scaffold inverse-transforms "
             "the GNMA features with scaler.sav before scoring, so reported "
             "diagnostics are in raw units: per-coupon-bucket RMSE (on raw "
-            "WAC), rate-sensitivity monotonicity (Spearman vs raw "
+            "WAC), S-curve R² and inflection point (vs raw "
             "Avg_Prop_Refi_Incentive_WAC_30yr_2mos), and regime-transition "
             "RMSE. A model that improves overall RMSE but degrades "
-            "per-coupon uniformity, refi-incentive monotonicity, or "
-            "regime-transition RMSE is a REJECT."
+            "per-coupon uniformity or regime-transition RMSE is a REJECT."
         )
         self.submission_specifications = (
             f"Produce {MBSP_SETTINGS.submission_filename} with columns "
@@ -159,12 +158,10 @@ class MBSPrepaymentScen(DataScienceScen):
         self.mbs_validator = DomainValidator(
             target_min=MBSP_SETTINGS.target_min,
             target_max=MBSP_SETTINGS.target_max,
-            min_rate_sensitivity_corr=MBSP_SETTINGS.validator_min_rate_sensitivity_corr,
             max_training_seconds=MBSP_SETTINGS.validator_max_training_seconds,
         )
         self.mbs_gate = PhaseGate(
             baseline_max_rmse=MBSP_SETTINGS.gate_baseline_max_rmse,
-            rate_response_min_monotonicity=MBSP_SETTINGS.gate_rate_response_min_monotonicity,
             rate_response_min_s_curve_r2=MBSP_SETTINGS.gate_rate_response_min_s_curve_r2,
             rate_response_inflection_range_bps=(
                 MBSP_SETTINGS.gate_rate_response_inflection_min_bps,
@@ -245,8 +242,8 @@ class MBSPrepaymentScen(DataScienceScen):
             "- Scoring: scaffold uses scaler.sav to inverse-transform GNMA "
             "features back to raw units (WAC in %, "
             "Avg_Prop_Refi_Incentive_WAC_30yr_2mos in raw incentive units, "
-            "etc.) so the harness measures per-coupon RMSE, refi-incentive "
-            "Spearman monotonicity, and seasoning effects on the real scale.\n"
+            "etc.) so the harness measures per-coupon RMSE, S-curve R², "
+            "inflection point, and seasoning effects on the real scale.\n"
             f"- Submission: write `{MBSP_SETTINGS.submission_filename}` "
             "with (cusip, fh_effdt, smm_decimal_pred). Scaffold clips "
             "predictions to [0, 1]."
@@ -265,5 +262,5 @@ class MBSPrepaymentScen(DataScienceScen):
             "Temporal split at "
             f"{MBSP_SETTINGS.train_end_date}. Metric: RMSE of SMM_DECIMAL, "
             "with per-coupon-bucket breakdown and rate-sensitivity "
-            "monotonicity checks. See scorecard from MBSEvaluationHarness."
+            "S-curve diagnostics. See scorecard from MBSEvaluationHarness."
         )

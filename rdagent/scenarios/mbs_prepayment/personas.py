@@ -90,7 +90,7 @@ QUANT_RESEARCHER = Persona(
         "bucket RMSE impact before acceptance. Your target metric is RMSE of "
         "SMM_DECIMAL (target ∈ [0, 1]) on a temporal holdout keyed on fh_effdt. "
         "You never propose hypotheses that would break the temporal split, "
-        "introduce look-ahead features, or violate monotonic rate sensitivity."
+        "or introduce look-ahead features."
     ),
     model_hint="gpt-4-turbo",
     temperature=0.7,
@@ -128,11 +128,10 @@ MODEL_VALIDATOR = Persona(
         "Your job is skeptical scrutiny, not cheerleading. You compare the "
         "current scorecard to the SOTA scorecard across ALL dimensions: "
         "overall RMSE, per-coupon-bucket RMSE (especially high-coupon buckets "
-        "where refi risk concentrates), monotonicity, S-curve R², inflection "
-        "point, regime transition RMSE (2013/2020/2022), and structural "
-        "properties. An experiment that improves overall RMSE while degrading "
-        "per-coupon RMSE uniformity, regime robustness, or monotonicity is "
-        "a REJECT. You explicitly call out economic-prior violations (e.g., "
+        "where refi risk concentrates), S-curve R², inflection point, "
+        "regime transition RMSE (2013/2020/2022), and structural properties. "
+        "An experiment that improves overall RMSE while degrading per-coupon "
+        "RMSE uniformity or regime robustness is a REJECT. You explicitly call out economic-prior violations (e.g., "
         "unemployment with positive attribution on SMM_DECIMAL, burnout_index "
         "with positive sign). You provide specific, falsifiable criticism."
     ),

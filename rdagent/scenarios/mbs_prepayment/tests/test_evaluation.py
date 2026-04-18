@@ -28,12 +28,14 @@ def synthetic_mbs_data():
     noise = rng.normal(0, 0.002, n)
     y_true = np.clip(true_smm + noise, 0.0, 1.0)
 
+    # Column names must match gnma_feature.md and MBSEvaluationHarness defaults
+    # fh_effdt as integer YYYYMMDD to match the real panel format
     features = pd.DataFrame({
         "cusip": cusips,
-        "fh_effdt": fh_effdt,
-        "coupon": coupons,
-        "rate_incentive": rate_incentive,
-        "wala": wala,
+        "fh_effdt": fh_effdt.strftime("%Y%m%d").astype(int),
+        "WAC": coupons,
+        "Avg_Prop_Refi_Incentive_WAC_30yr_2mos": rate_incentive,
+        "WALA": wala,
     })
     return features, y_true
 
@@ -75,8 +77,8 @@ def test_per_coupon_rmse_all_buckets_reported(synthetic_mbs_data):
 @pytest.mark.offline
 def test_monotonicity_detected_for_good_model(synthetic_mbs_data):
     features, y_true = synthetic_mbs_data
-    # Prediction perfectly monotonic in rate_incentive
-    y_pred = features["rate_incentive"].to_numpy() * 0.01 + 0.01
+    # Prediction perfectly monotonic in Avg_Prop_Refi_Incentive_WAC_30yr_2mos
+    y_pred = features["Avg_Prop_Refi_Incentive_WAC_30yr_2mos"].to_numpy() * 0.01 + 0.01
 
     harness = MBSEvaluationHarness()
     scorecard = harness.evaluate(y_true, y_pred, features)

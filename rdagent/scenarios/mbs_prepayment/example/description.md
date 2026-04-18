@@ -44,8 +44,10 @@ respect MBS prepayment theory:
   - Collateral / credit: `CLTV`, `Orig_FICO`, `Orig_LTV`, `SATO`,
     `Pool_HPA_2yr`, `Orig_Avg_Loan_Size`
   - Servicer mix, channel mix, geography, program (FHA/VA), seasonality
-- **Forbidden features** (future leakage): `future_smm`, `forward_smm`,
-  `next_month_smm`, `forward_rate`, `future_rate_incentive`
+- **Forbidden features** (target leakage / future leakage):
+  `CPR_DECIMAL` (annualised form of the target — direct leakage),
+  `future_smm`, `forward_smm`, `next_month_smm`, `forward_rate`,
+  `future_rate_incentive`
 
 ### Files shipped to the coder
 

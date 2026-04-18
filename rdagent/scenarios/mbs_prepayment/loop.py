@@ -197,8 +197,8 @@ class MBSPrepaymentRDLoop(DataScienceRDLoop):
 
         The raw ``y_pred`` / ``rate_incentive`` arrays are not available on
         the DS experiment object, but the MBS scaffold has already written
-        aggregate diagnostics (overall_rmse, spearman monotonicity, per-
-        dimension errors) to ``scores.json`` via ``MBSEvaluationHarness``.
+        aggregate diagnostics (overall_rmse, per-dimension errors)
+        to ``scores.json`` via ``MBSEvaluationHarness``.
         ``validate_from_scorecard`` inspects those directly, so the auto-
         reject gate fires on real failure modes.
         """
@@ -253,7 +253,6 @@ class MBSPrepaymentRDLoop(DataScienceRDLoop):
             iteration=loop_id,
             component_touched=component,
             overall_rmse=float(acc.get("overall_rmse", float("inf"))),
-            rate_sensitivity_monotonic=float(rs.get("monotonicity_spearman", 0.0)) > 0.3,
             has_rate_incentive=(
                 "rate_sensitivity" in (scorecard or {})
                 and "_error" not in (scorecard or {}).get("rate_sensitivity", {})

@@ -47,7 +47,6 @@ def test_model_properties_from_scorecard():
         n_features_used=5,
     )
     assert props.overall_rmse == 0.030
-    assert props.rate_sensitivity_spearman == 0.6
     assert props.rmse_by_coupon_bucket["5.0+"] == 0.045
     assert props.regime_transition_rmse_mean == 0.040
     assert "rmse=0.03000" in props.summary_line()

@@ -74,12 +74,13 @@ class MBSEvaluationHarness:
     regime_transition_dates: list[str] = field(
         default_factory=lambda: ["2013-05-01", "2020-03-01", "2022-03-01"]
     )
-    #: Column names in the features DataFrame.
-    coupon_col: str = "coupon"
-    rate_incentive_col: str = "rate_incentive"
+    #: Column names in the features DataFrame — must match gnma_feature.md
+    #: and GNMA_HARNESS_FEATURES in scaffold.py exactly (case-sensitive).
+    coupon_col: str = "WAC"
+    rate_incentive_col: str = "Avg_Prop_Refi_Incentive_WAC_30yr_2mos"
     fh_effdt_col: str = "fh_effdt"
     cusip_col: str = "cusip"
-    wala_col: str = "wala"
+    wala_col: str = "WALA"
 
     def evaluate(
         self,
@@ -171,7 +172,7 @@ class MBSEvaluationHarness:
         """Per-vintage-year RMSE, inferred from WALA and fh_effdt."""
         if self.wala_col not in features.columns or self.fh_effdt_col not in features.columns:
             return {}
-        fh = pd.to_datetime(features[self.fh_effdt_col], errors="coerce")
+        fh = pd.to_datetime(features[self.fh_effdt_col], format="%Y%m%d", errors="coerce")
         wala = features[self.wala_col].to_numpy(dtype=float)
         vintage_year = (fh.dt.year - (wala / 12.0).astype(int)).to_numpy()
         result: dict[str, float] = {}
@@ -209,7 +210,7 @@ class MBSEvaluationHarness:
         out: dict[str, Any] = {}
         if self.fh_effdt_col not in features.columns:
             return {"_error": f"feature '{self.fh_effdt_col}' not found"}
-        fh = pd.to_datetime(features[self.fh_effdt_col], errors="coerce")
+        fh = pd.to_datetime(features[self.fh_effdt_col], format="%Y%m%d", errors="coerce")
 
         # Regime transition RMSE: first 3 months after each known transition
         regime_rmses: dict[str, float] = {}
@@ -254,7 +255,7 @@ class MBSEvaluationHarness:
 
         # Seasonality: residual variance by month-of-year
         if self.fh_effdt_col in features.columns:
-            fh = pd.to_datetime(features[self.fh_effdt_col], errors="coerce")
+            fh = pd.to_datetime(features[self.fh_effdt_col], format="%Y%m%d", errors="coerce")
             moy = fh.dt.month
             resid = y_true - y_pred
             by_month = pd.DataFrame({"moy": moy, "resid": resid}).dropna().groupby("moy")["resid"].mean()

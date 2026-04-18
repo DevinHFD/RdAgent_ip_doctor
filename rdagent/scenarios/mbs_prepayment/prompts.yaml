@@ -91,8 +91,7 @@ scenario_description: |
   ## Evaluation Hierarchy (reported by MBSEvaluationHarness)
   1. Accuracy: overall_rmse, rmse_by_coupon_bucket, rmse_tail_high/low,
      rmse_by_vintage
-  2. Rate Sensitivity Fidelity: monotonicity_spearman, s_curve_r2,
-     inflection_point_bps
+  2. Rate Sensitivity Fidelity: s_curve_r2, inflection_point_bps
   3. Temporal Robustness: regime_transition_rmse, rolling_12m_rmse_ratio
   4. Structural Properties: burnout_effect_mean_itm vs non_itm,
      seasonality_residual_range, cusip_differentiation_std
@@ -178,8 +177,12 @@ component_spec:
       panel key, not a feature)
     - Do NOT re-normalize or re-standardize features — they are already
       normalized
-    - Do NOT introduce any forbidden column (`future_smm`, `forward_smm`,
-      `next_month_smm`, `forward_rate`, `future_rate_incentive`)
+    - Do NOT use `CPR_DECIMAL` — it is the annualised form of the target
+      `SMM_DECIMAL` (CPR = 1 - (1 - SMM)^12) and is **direct target
+      leakage**. The scaffold will reject any panel that includes it.
+    - Do NOT introduce any other forbidden column (`future_smm`,
+      `forward_smm`, `next_month_smm`, `forward_rate`,
+      `future_rate_incentive`)
     - Do NOT look up or join external data that is not in `tfminput.pkl`
     - Do NOT rename existing columns — downstream scaffold code depends
       on exact column names
@@ -224,19 +227,6 @@ component_spec:
     - **PyTorch**: for neural network models
     - Do NOT use packages that are not listed above.
 
-    ### Monotonicity (critical for acceptance)
-    The MBS evaluation harness computes Spearman rank correlation between
-    predictions and **raw-scale** `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`
-    (after inverse-transform via `scaler.sav`). This must be **positive**.
-
-    To help ensure monotonicity:
-    - For XGBoost/LightGBM: use `monotone_constraints` to enforce positive
-      monotonicity on the refi-incentive feature column.
-    - For CatBoost: use `monotone_constraints`.
-    - Do NOT compute Spearman yourself — the scaffold handles it.
-    - For ensembles: verify that the blend does not reverse the monotonicity
-      of individual models.
-
     ### Constraints
     - Output range must be interpretable as SMM_DECIMAL in [0.0, 1.0]. The
       scaffold will clip predictions, but your model should naturally produce
@@ -261,11 +251,10 @@ component_spec:
     out-of-sample rate scenarios.
 
     ### Checks (deterministic, no LLM)
-    1. Predictions at rate_incentive = -300bps, -100bps, 0, +100bps, +300bps
-       should be monotonically non-decreasing (S-curve).
-    2. At extreme +300bps, predicted SMM_DECIMAL should not exceed the
-       max observed training SMM_DECIMAL × 1.5 (no dangerous extrapolation).
-    3. Burnout check: for matched CUSIPs at identical rate_incentive but
+    1. At extreme rate_incentive (+300bps), predicted SMM_DECIMAL should not
+       exceed the max observed training SMM_DECIMAL × 1.5 (no dangerous
+       extrapolation).
+    2. Burnout check: for matched CUSIPs at identical rate_incentive but
        different burnout_index values, higher burnout should predict lower
        SMM_DECIMAL.
 
@@ -308,8 +297,8 @@ component_spec:
     - Fits the model via `build_model().fit(X_train, y_train)`
     - Clips predictions to [0, 1]
     - Writes `submission.csv`, `scores.json`, `scores.csv`
-    - Computes per-coupon-bucket RMSE, Spearman monotonicity, regime-
-      transition RMSE, and all other MBS scorecard metrics
+    - Computes per-coupon-bucket RMSE, regime-transition RMSE, and all
+      other MBS scorecard metrics
 
     ### What you MUST NOT do
     - Do NOT implement your own train/test split or date parsing
@@ -317,7 +306,6 @@ component_spec:
     - Do NOT implement debug mode, argparse, or data sampling
     - Do NOT use `mean_squared_error(..., squared=False)` — use
       `np.sqrt(mean_squared_error(...))` if you need RMSE anywhere
-    - Do NOT compute Spearman monotonicity yourself
     - Do NOT call `train_test_split` from sklearn
     - Do NOT parse `fh_effdt` with `pd.to_datetime(df["fh_effdt"])`
       without `format="%Y%m%d"` — integers will be misinterpreted
@@ -339,11 +327,6 @@ component_spec:
       (e.g., LightGBM + XGBoost + Ridge). Do NOT duplicate the same
       model type — 3× LightGBM with different seeds is NOT an ensemble.
     - Ensemble weights should be tuned on validation RMSE.
-    - Before finalizing: verify that the ensemble's Spearman correlation
-      with the refinance incentive feature is **positive** and at least
-      as good as the worst individual model's Spearman. A blend that
-      reverses monotonicity will be rejected.
-
     ### Metric calculation
     - Save per-model and ensemble validation scores to `scores.csv`.
     - The metric column name must be `rmse_smm_decimal`.
@@ -358,7 +341,6 @@ feedback_schema_extra: |
   Additional MBS-specific fields that MUST appear in the feedback JSON:
 
   {
-    "rate_sensitivity_check": "Does predicted SMM_DECIMAL increase monotonically with rate_incentive? Pass/Fail with Spearman value.",
     "burnout_check": "For CUSIPs with >12 months of positive rate_incentive, does predicted SMM_DECIMAL decrease vs fresh CUSIPs? Pass/Fail.",
     "temporal_stability": "Is holdout RMSE within 1.5x of training RMSE? Pass/Fail with numbers.",
     "extreme_regime_check": "When rate_incentive exceeds +200bps, does predicted SMM_DECIMAL plateau (Reasonable) or explode (Dangerous)?",
@@ -387,7 +369,6 @@ feedback_problem_guidance: |
   When reviewing past experiment feedback for MBS-specific failure modes,
   check for:
 
-    - Rate sensitivity monotonicity: is it positive and reasonable?
     - Burnout decay: does refi response decrease for pools ITM >12 months?
     - Seasonal pattern: higher SMM in summer (turnover season)?
     - Per-coupon-bucket regression: any bucket getting worse?

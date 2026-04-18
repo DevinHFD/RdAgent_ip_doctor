@@ -59,7 +59,6 @@ class ModelProperties:
     component_touched: str
     overall_rmse: float
     rmse_by_coupon_bucket: dict[str, float] = field(default_factory=dict)
-    rate_sensitivity_spearman: float = 0.0
     s_curve_r2: float = 0.0
     inflection_point_bps: float = 0.0
     burnout_halflife_months: float | None = None
@@ -75,8 +74,7 @@ class ModelProperties:
         return (
             f"iter={self.iteration} model={self.model_type} "
             f"component={self.component_touched} "
-            f"rmse={self.overall_rmse:.5f} s_curve_r2={self.s_curve_r2:.2f} "
-            f"monotonic={self.rate_sensitivity_spearman:+.2f}"
+            f"rmse={self.overall_rmse:.5f} s_curve_r2={self.s_curve_r2:.2f}"
         )
 
     @classmethod
@@ -106,7 +104,6 @@ class ModelProperties:
             rmse_by_coupon_bucket={
                 k: float(v) for k, v in (acc.get("rmse_by_coupon_bucket", {}) or {}).items()
             },
-            rate_sensitivity_spearman=float(rs.get("monotonicity_spearman", 0.0)),
             s_curve_r2=float(rs.get("s_curve_r2", 0.0)),
             inflection_point_bps=float(rs.get("inflection_point_bps", 0.0)),
             burnout_halflife_months=burnout_halflife_months,
@@ -223,8 +220,7 @@ class MBSMemory:
                 p = e["properties"]
                 lines.append(
                     f"- **{comp}** (iter {e['iteration']}): rmse={p['overall_rmse']:.5f}, "
-                    f"s_curve_r2={p['s_curve_r2']:.2f}, "
-                    f"monotonic={p['rate_sensitivity_spearman']:+.2f}"
+                    f"s_curve_r2={p['s_curve_r2']:.2f}"
                 )
                 if p.get("rmse_by_coupon_bucket"):
                     coupon_str = ", ".join(
@@ -248,7 +244,6 @@ class MBSMemory:
             for p in latest:
                 lines.append(
                     f"- iter {p['iteration']}: rmse={p['overall_rmse']:.5f}, "
-                    f"monotonic={p['rate_sensitivity_spearman']:+.2f}, "
                     f"cusip_diff_std={p['cusip_differentiation_std']:.4f}"
                 )
         return "\n".join(lines)
@@ -277,7 +272,6 @@ class MBSMemory:
                 f"\n### SOTA so far (iter {sota['iteration']})"
                 f"\n- overall_rmse: {sota['overall_rmse']:.5f}"
                 f"\n- s_curve_r2: {sota['s_curve_r2']:.2f}"
-                f"\n- monotonic: {sota['rate_sensitivity_spearman']:+.2f}"
             )
             if sota.get("rmse_by_coupon_bucket"):
                 coupon_str = ", ".join(

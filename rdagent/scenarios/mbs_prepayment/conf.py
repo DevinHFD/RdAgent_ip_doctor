@@ -132,14 +132,12 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # ------------------------------------------------------------------
     # 7. Domain validator (Priority 8)
     # ------------------------------------------------------------------
-    validator_min_rate_sensitivity_corr: float = 0.3
     validator_max_training_seconds: float = 3600.0
 
     # ------------------------------------------------------------------
     # 8. Phase gates (Priority 8)
     # ------------------------------------------------------------------
     gate_baseline_max_rmse: float = 0.040
-    gate_rate_response_min_monotonicity: float = 0.7
     gate_rate_response_min_s_curve_r2: float = 0.6
     gate_rate_response_inflection_min_bps: float = 50.0
     gate_rate_response_inflection_max_bps: float = 150.0

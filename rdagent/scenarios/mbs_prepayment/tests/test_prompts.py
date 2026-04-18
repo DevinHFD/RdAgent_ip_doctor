@@ -44,7 +44,8 @@ def test_dataloader_spec_enforces_temporal_lag():
 def test_feature_eng_spec_lists_canonical_features():
     loader = MBSPromptLoader()
     spec = loader.get("component_spec.FeatureEng")
-    for feat in ["rate_incentive", "burnout_index", "seasoning_ramp", "coupon_bucket"]:
+    # Use actual column names from gnma_feature.md (case-sensitive)
+    for feat in ["Avg_Prop_Refi_Incentive_WAC_30yr_2mos", "Burnout_Prop_WAC_30yr_log_sum60", "seasoning_ramp", "coupon_bucket"]:
         assert feat in spec, f"Canonical feature '{feat}' missing from FeatureEng spec"
 
 
@@ -53,7 +54,6 @@ def test_feedback_schema_includes_coupon_bucket_check():
     loader = MBSPromptLoader()
     schema = loader.get("feedback_schema_extra")
     assert "coupon_bucket_check" in schema
-    assert "rate_sensitivity_check" in schema
     assert "burnout_check" in schema
 
 

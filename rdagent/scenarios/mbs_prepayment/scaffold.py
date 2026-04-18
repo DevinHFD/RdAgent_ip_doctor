@@ -15,7 +15,7 @@ This scaffold assumes the single-panel layout:
                        # features, etc.) back to their raw (percent / month)
                        # scale — the MBS evaluation harness needs raw WAC
                        # for coupon-bucket RMSE and raw refi-incentive for
-                       # the Spearman monotonicity check.
+                       # S-curve R² and inflection-point diagnostics.
         description.md
         sample_submission.csv
 
@@ -81,12 +81,16 @@ class MBSDataContract:
     harness_raw_features: tuple[str, ...] = GNMA_HARNESS_FEATURES
 
     #: Columns that must never appear — future-leakage sentinels.
+    #: CPR_DECIMAL is the annualised form of the target SMM_DECIMAL
+    #: (CPR = 1 - (1 - SMM)^12), so using it as a feature is direct
+    #: target leakage and is forbidden unconditionally.
     forbidden_columns: tuple[str, ...] = (
         "future_smm",
         "forward_smm",
         "next_month_smm",
         "forward_rate",
         "future_rate_incentive",
+        "CPR_DECIMAL",
     )
 
     def validate(self, df: pd.DataFrame, *, include_target: bool = True) -> None:

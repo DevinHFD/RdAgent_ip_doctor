@@ -95,7 +95,7 @@ class MBSExperiment2Feedback(DSExperiment2Feedback):
                 "```\n"
                 "Use this multi-dimensional scorecard to assess the experiment. "
                 "An experiment that improves overall RMSE but degrades per-coupon "
-                "RMSE uniformity, regime robustness, or monotonicity is a REJECT."
+                "RMSE uniformity or regime robustness is a REJECT."
             )
 
         # 2) MBS memory: feedback-phase context
