@@ -57,10 +57,12 @@ hypothesis_specification: |
      LTV, coupon) and dynamic features (current WAM, current rate incentive,
      burnout index, seasoning ramp). The model must handle both.
 
-  4. NEVER propose "try XGBoost/LightGBM on all features" or "tune
-     hyperparameters" as a standalone hypothesis. Every iteration must have
-     prepayment-theoretic grounding from the Richard-Roll framework or
-     empirical prepayment literature.
+  4. NEVER propose bare model swaps ("try XGBoost/LightGBM on all features",
+     "try a deeper MLP", "tune hyperparameters") as standalone hypotheses.
+     Every iteration must have prepayment-theoretic grounding — what
+     economic mechanism does this model/architecture capture better?
+     Equally valid to propose GBM or neural-network hypotheses as long as
+     they are grounded in the Richard-Roll framework or prepayment literature.
 
   5. Every feature-engineering hypothesis must state the expected impact on
      per-coupon-bucket RMSE, not just overall RMSE. A model that improves
@@ -223,11 +225,27 @@ component_spec:
       normalized in tfminput.pkl; do NOT re-normalize)
 
     ### Search strategy
-    **Start with GBM models** (LightGBM, XGBoost, CatBoost) as the primary
-    search path — they are faster to iterate and often competitive. Also
-    explore neural network architectures, especially deeper or wider MLPs,
-    attention-based models, or models that incorporate the UPB-weighted loss.
-    Hypotheses that improve over the SOTA MLP are most valuable.
+    Explore **both** model families actively — do not focus exclusively on
+    either GBMs or neural networks:
+
+    **GBM family** (LightGBM, XGBoost, CatBoost, sklearn GradientBoosting):
+    - Fast to iterate, interpretable feature importance, native
+      sample_weight support for UPB-weighted loss.
+    - Good starting point: LightGBM with 200 trees, leaf-wise growth,
+      `sample_weight=min(fh_upb, 150M)`.
+
+    **Neural network family** (PyTorch MLP and variants):
+    - Current SOTA is already an MLP [10, 20, 10] — improvements here are
+      high-value. Try deeper/wider architectures, residual connections,
+      attention over CUSIP features, or custom loss functions.
+    - Use X_val / y_val (passed by the scaffold) for early stopping.
+    - Mini-batch training (batch_size ≥ 4096) is required for the full
+      ~4.5 M-row panel.
+
+    **Rough alternation target**: roughly every other hypothesis should
+    come from a different family than the previous one. Do not run 3+
+    consecutive GBM iterations or 3+ consecutive neural-net iterations
+    without switching.
 
     ### UPB-weighted loss
     The SOTA model uses fh_upb-weighted RMSE. To replicate this:
