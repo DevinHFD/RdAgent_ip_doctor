@@ -271,20 +271,251 @@ The following five changes wire the modules directly into the live loop:
 | `prompt_loader.py` / `prompts.yaml` | Defined, not consumed | Still not directly in the proposal path |
 | `execution_env.py` (`IncrementalRunner`, `ArtifactCache`) | Defined, not consumed | Still not in the runner path |
 
-### New calling chain
+### End-to-End Function Call Chain
+
+The complete chain for one iteration of `rdagent mbs_prepayment`:
+
+#### 0. Entry & Bootstrap
 
 ```
-rdagent mbs_prepayment
-  └── rdagent/app/mbs_prepayment/loop.py :: main()
-        └── MBSPrepaymentRDLoop(DS_RD_SETTING)          # loop.py (this folder)
-              ├── __init__:   swap summarizer → MBSExperiment2Feedback (feedback.py)
-              ├── direct_exp_gen / coding / running     # inherited from DataScienceRDLoop
-              │     └── every LLM call reads scen.get_scenario_all_desc()
-              │           → injects phase + search constraints + MBS memory + data contract
-              ├── feedback:   DomainValidator auto-reject  →  MODEL_VALIDATOR-led LLM feedback
-              └── record:     MBSMemory.append_entry()
-                              MBSSearchState.append()
-                              MBSOrchestrator.evaluate_gate() → advance_phase()
+app/mbs_prepayment/loop.py::main()
+├── RD_AGENT_SETTINGS.app_tpl = "app/mbs_prepayment/tpl"     ← activates MBS prompt overrides
+├── DS_RD_SETTING.scen = "...mbs_prepayment.scenario.MBSPrepaymentScen"
+│
+├── MBSPrepaymentRDLoop(DS_RD_SETTING)                        [scenarios/mbs_prepayment/loop.py]
+│   └── super().__init__() → DataScienceRDLoop.__init__()     [scenarios/data_science/loop.py:96]
+│       ├── import_class(scen)() → MBSPrepaymentScen(competition)  [scenarios/mbs_prepayment/scenario.py]
+│       │   ├── super().__init__() → DataScienceScen()
+│       │   │   ├── reads description.md from data folder
+│       │   │   ├── competition_description_template → LLM call (APIBackend)
+│       │   │   └── sets metric_direction, metric_name, etc.
+│       │   ├── MBSDataContract(), MBSTrainTestSplit()        [scaffold.py]
+│       │   ├── MBSOrchestrator()                              [orchestration.py]
+│       │   ├── DomainValidator()                              [orchestration.py]
+│       │   ├── MBSStructuredMemory()                          [memory.py]
+│       │   └── MBSSearchState()                               [search_strategy.py]
+│       │
+│       ├── DSProposalV2ExpGen(scen)                  ← exp_gen (proposer)
+│       ├── DataLoaderCoSTEER(scen)                   ← component coders
+│       ├── FeatureCoSTEER(scen)
+│       ├── ModelCoSTEER(scen)
+│       ├── EnsembleCoSTEER(scen)
+│       ├── WorkflowCoSTEER(scen)
+│       ├── PipelineCoSTEER(scen)
+│       ├── DSCoSTEERRunner(scen)                     ← runner
+│       ├── DSTrace(scen)                             ← trace history
+│       └── MBSExperiment2Feedback(scen)              ← summarizer (overridden by MBS __init__)
+│
+└── asyncio.run(mbs_loop.run())
+```
+
+#### 1. `direct_exp_gen` — Proposal (7+ LLM calls)
+
+```
+MBSPrepaymentRDLoop.direct_exp_gen()                          [inherited from DataScienceRDLoop]
+├── ckp_selector.get_selection(trace)                          ← MCTS checkpoint selection
+├── exp_gen.async_gen(trace) → DSProposalV2ExpGen.gen()        [proposal/exp_gen/proposal.py:1300]
+│   │
+│   ├── scen.get_scenario_all_desc()                           [mbs_prepayment/scenario.py:197]
+│   │   ├── super().get_scenario_all_desc()                    ← DS base description
+│   │   ├── mbs_orchestrator.phase_spec()                      ← current phase, gate criteria
+│   │   ├── mbs_orchestrator.iteration_constraints()           ← curriculum filter
+│   │   ├── mbs_memory.render_context(HYPOTHESIS_GEN)          ← structured memory
+│   │   └── MBS Data Contract (features, split, scoring)
+│   │
+│   ├── [Step 1] identify_problem()                            [proposal.py:569]
+│   │   ├── identify_scenario_problem()                        ← LLM call #1
+│   │   │   ├── T(".prompts_v2:scenario_problem.system")
+│   │   │   │   └── {% include "scenarios.data_science.share:scen.role" %}
+│   │   │   │       └── app_tpl override → MBS scen.role (prepayment modeler persona)
+│   │   │   └── APIBackend().build_messages_and_create_chat_completion()
+│   │   │
+│   │   └── identify_feedback_problem()                        ← LLM call #2
+│   │       ├── T(".prompts_v2:feedback_problem.system")
+│   │       │   └── {% include scen.role %} → MBS persona
+│   │       └── APIBackend()...
+│   │
+│   ├── [Step 2] hypothesis_gen()                              ← LLM call #3
+│   │   ├── T(".prompts_v2:hypothesis_gen.system")
+│   │   │   └── {% include scen.role %} → MBS persona
+│   │   └── APIBackend()...
+│   │
+│   ├── [Step 2.1] hypothesis_critique()                       ← LLM call #4
+│   │   ├── T(".prompts_v2:hypothesis_critique.system")
+│   │   │   └── {% include scen.role %} → MBS persona
+│   │   └── APIBackend()...
+│   │
+│   ├── [Step 2.2] hypothesis_rewrite()                        ← LLM call #5
+│   │   ├── T(".prompts_v2:hypothesis_rewrite.system")
+│   │   │   └── {% include scen.role %} → MBS persona
+│   │   └── APIBackend()...
+│   │
+│   ├── [Step 3] hypothesis_select_with_llm()                  ← LLM call #6
+│   │   ├── T(".prompts_v2:hypothesis_select.system")
+│   │   └── APIBackend()...
+│   │
+│   └── [Step 4] task_gen()                                    ← LLM call #7
+│       ├── get_component(hypothesis.component)
+│       │   └── T("scenarios.data_science.share:component_spec.{component}")
+│       │       └── app_tpl override → MBS component specs
+│       │           DataLoadSpec → MBS DataLoader spec
+│       │           FeatureEng  → MBS FeatureEng spec (forbids cusip_target_enc)
+│       │           Model       → MBS PrepaymentModel spec
+│       │           Workflow    → MBS ScenarioValidator spec
+│       │           Ensemble    → falls through to DS default
+│       ├── T(".prompts_v2:task_gen.system")
+│       ├── T(".prompts:hypothesis_specification")
+│       │   └── app_tpl override → MBS hypothesis_specification
+│       │       (prepayment components, rate-curve, per-coupon-bucket RMSE)
+│       └── APIBackend()...
+│           → returns DSExperiment(pending_tasks_list, hypothesis)
+│
+└── interactor.interact(exp, trace)                            ← optional human interaction
+```
+
+#### 2. `coding` — Code Generation (2+ LLM calls per component)
+
+```
+MBSPrepaymentRDLoop.coding()                                   [inherited from DataScienceRDLoop]
+├── for each task in exp.pending_tasks_list:
+│   ├── isinstance check → dispatch to correct coder:
+│   │
+│   │   [If FeatureTask] → FeatureCoSTEER.develop(exp)
+│   │   [If ModelTask]   → ModelCoSTEER.develop(exp)
+│   │   [If PipelineTask]→ PipelineCoSTEER.develop(exp)        ← most common with coder_on_whole_pipeline
+│   │   ...etc
+│   │
+│   └── CoSTEER.develop(exp)                                   [components/coder/CoSTEER]
+│       ├── MultiProcessEvolvingStrategy.implement_one_task()
+│       │   ├── system_prompt includes:
+│       │   │   └── T("scenarios.data_science.share:component_spec.{component}")
+│       │   │       → MBS override via app_tpl (Model → PrepaymentModel spec, etc.)
+│       │   ├── APIBackend()... → generates code                ← LLM call (code gen)
+│       │   └── writes .py files to experiment workspace
+│       │
+│       └── CoSTEEREvaluator.evaluate()
+│           ├── runs generated code in subprocess/Docker
+│           ├── parses output, checks format
+│           └── APIBackend()... → eval feedback                 ← LLM call (code eval)
+│               └── T("scenarios.data_science.dev.runner.prompts:DSCoSTEER_eval")
+│                   └── {% include scen.role %} → MBS persona
+│
+│   (loop: evolve code up to max_evolve iterations)
+```
+
+#### 3. `running` — Execution
+
+```
+MBSPrepaymentRDLoop.running()                                  [inherited from DataScienceRDLoop]
+├── DSCoSTEERRunner.develop(exp)                               [scenarios/data_science/dev/runner]
+│   ├── MultiProcessEvolvingStrategy → runs code in Docker
+│   │   ├── subprocess: python main.py                         ← user's code
+│   │   │   └── (in MBS) calls scaffold:
+│   │   │       run_scaffold_pipeline(panel_path, scaler_path, model_builder, output_dir)
+│   │   │       ├── pd.read_pickle("tfminput.pkl")             ← load panel
+│   │   │       ├── MBSDataContract.validate(panel)            ← check required/forbidden cols
+│   │   │       ├── MBSWorkflow.run(panel, model_builder)
+│   │   │       │   ├── MBSTrainTestSplit.split(df)            ← temporal on fh_effdt ≤ 2021-12-31
+│   │   │       │   ├── model_builder().fit(X_train, y_train)  ← LLM-generated model
+│   │   │       │   ├── model.predict(X_test)
+│   │   │       │   └── clip_predictions(y_pred, contract)     ← clamp to [0, 1]
+│   │   │       ├── inverse_transform_features(test_df, scaler, GNMA_HARNESS_FEATURES)
+│   │   │       │   └── raw_value = normalized × scale + mean   ← Pool_HPA_2yr, WAC, WALA, etc.
+│   │   │       ├── MBSEvaluationHarness.evaluate()            [evaluation.py]
+│   │   │       │   ├── overall RMSE
+│   │   │       │   ├── per-coupon-bucket RMSE (WAC buckets)
+│   │   │       │   ├── monotonicity_spearman (refi incentive)
+│   │   │       │   ├── regime-transition RMSE
+│   │   │       │   └── structural properties (burnout, seasonality, CUSIP differentiation)
+│   │   │       ├── write_scorecard() → scores.json
+│   │   │       └── write scores.csv (primary_metric: rmse_smm_decimal)
+│   │   │
+│   │   └── parses scores.csv → exp.result
+│   │
+│   └── DSRunnerEvaluator.evaluate()
+│       └── T("...DSCoSTEER_eval.system")
+│           └── {% include scen.role %} → MBS persona          ← LLM call (runner eval)
+```
+
+#### 4. `feedback` — MBS-Specific Feedback (1-2 LLM calls)
+
+```
+MBSPrepaymentRDLoop.feedback()                                 [mbs_prepayment/loop.py]
+│
+├── _read_scorecard(exp)                                       ← reads scores.json from workspace
+│
+├── _domain_validate(scorecard)                                ← deterministic auto-reject gate
+│   └── DomainValidator.validate_from_scorecard(scorecard)     [orchestration.py]
+│       ├── check monotonicity_spearman > threshold
+│       ├── check overall_rmse < max
+│       └── check per-coupon uniformity
+│       → if FAIL: return ExperimentFeedback(decision=False)   ← NO LLM call, saves a round trip
+│
+├── [if validation passes] → super().feedback()
+│   └── DataScienceRDLoop.feedback()
+│       └── MBSExperiment2Feedback.generate_feedback()         [mbs_prepayment/feedback.py]
+│           │
+│           ├── system_prompt:
+│           │   ├── MODEL_VALIDATOR.system_prompt              ← persona preamble [personas.py]
+│           │   └── T("scenarios.data_science.dev.prompts:exp_feedback.system")
+│           │       └── rendered with scen.get_scenario_all_desc()
+│           │           → includes MBS phase, memory, data contract
+│           │
+│           ├── user_prompt:
+│           │   ├── T("scenarios.data_science.dev.prompts:exp_feedback.user")
+│           │   │   └── SOTA desc, current exp code/results, diff
+│           │   ├── + mbs_scorecard_text                       ← scores.json (per-coupon, monotonicity)
+│           │   ├── + mbs_memory_text                          ← MBS memory FEEDBACK phase context
+│           │   └── + mbs_schema_extra                         ← feedback_schema_extra from prompts.yaml
+│           │       (rate_sensitivity_check, burnout_check, coupon_bucket_check, etc.)
+│           │
+│           ├── APIBackend().build_messages_and_create_chat_completion()  ← LLM call (feedback)
+│           │   → JSON with: Observations, Feedback for Hypothesis,
+│           │     Replace Best Result, rate_sensitivity_check, burnout_check,
+│           │     coupon_bucket_check, temporal_stability, extreme_regime_check
+│           │
+│           └── returns HypothesisFeedback(decision, reason, ...)
+```
+
+#### 5. `record` — MBS State Update (no LLM)
+
+```
+MBSPrepaymentRDLoop.record()                                   [mbs_prepayment/loop.py]
+├── super().record()                                           ← DS base: trace sync, SOTA update, archiving
+│   └── DataScienceRDLoop.record()
+│       ├── trace.sync_dag_parent_and_hist()
+│       ├── sota_exp_selector.get_sota_exp_to_submit()
+│       └── log_object(trace, sota_experiment)
+│
+├── _update_memory(loop_id, exp, feedback, scorecard, success) ← MBS structured memory
+│   ├── ModelProperties.from_scorecard()                       ← extract model props from scorecard
+│   ├── TraceEntry(iteration, component, hypothesis, ...)
+│   └── mbs_memory.append_entry(entry)
+│
+├── _update_search_state(loop_id, exp, success, scorecard)     ← curriculum / cooldown
+│   └── mbs_search_state.append(IterationRecord)
+│
+└── mbs_orchestrator.evaluate_gate()                           ← phase gate evaluation
+    ├── checks gate criteria (rmse < threshold, monotonicity > threshold, etc.)
+    └── if gate_result.passed:
+        └── mbs_orchestrator.advance_phase()                   ← moves to next phase
+            → e.g. BASELINE → RATE_SENSITIVITY → ROBUSTNESS → REFINEMENT
+```
+
+#### Prompt Override Flow (via `app_tpl`)
+
+```
+Any T("scenarios.data_science.share:scen.role").r()
+│
+├── load_content() tries (in order):
+│   1. rdagent/app/mbs_prepayment/tpl/scenarios/data_science/share.yaml  ← FOUND
+│   │   scen.role: {% include "scenarios.mbs_prepayment.prompts:scen.role" %}
+│   │   └── loads from rdagent/scenarios/mbs_prepayment/prompts.yaml     ← source of truth
+│   │       → "You are an expert quantitative prepayment modeler..."
+│   2. (skipped) rdagent/scenarios/data_science/share.yaml
+│
+Same pattern for component_spec.{DataLoadSpec,FeatureEng,Model,Workflow}
+and hypothesis_specification.
 ```
 
 ---
