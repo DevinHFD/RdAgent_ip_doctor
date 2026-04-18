@@ -6,8 +6,9 @@ This scaffold assumes the single-panel layout:
         tfminput.pkl   # Full CUSIP-level monthly panel, ALL feature columns
                        # stored in normalized form (mean 0, std 1). Also
                        # carries cusip, fh_effdt, and the target
-                       # smm_decimal (which is NOT normalized, it lives in
-                       # [0, 1] already).
+                       # SMM_DECIMAL (which is NOT normalized, it lives in
+                       # [0, 1] already). NOTE: the column is uppercase
+                       # "SMM_DECIMAL" in the file, not "smm_decimal".
         scaler.sav     # joblib-saved fitted sklearn-style scaler. Inverse-
                        # transforms the GNMA features listed in
                        # example/gnma_feature.md (WAC, WALA,
@@ -80,7 +81,8 @@ class MBSDataContract:
 
     cusip_col: str = "cusip"
     date_col: str = "fh_effdt"
-    target_col: str = "smm_decimal"
+    #: Target column name — uppercase "SMM_DECIMAL" as stored in tfminput.pkl.
+    target_col: str = "SMM_DECIMAL"
     target_range: tuple[float, float] = (0.0, 1.0)
 
     #: Columns that must be present in the panel (normalized scale is fine —
@@ -404,7 +406,13 @@ def _append_test_predictions(
     record.insert(0, "loop_number", loop_num)
 
     # Rename to canonical column names for the history file.
-    rename = {contract.cusip_col: "cusip", contract.date_col: "fh_effdt", contract.target_col: "smm_decimal"}
+    # Normalise to lowercase column names in the history CSV so readers don't
+    # need to know whether the source panel used "SMM_DECIMAL" or "smm_decimal".
+    rename = {
+        contract.cusip_col: "cusip",
+        contract.date_col: "fh_effdt",
+        contract.target_col: "smm_decimal",
+    }
     record = record.rename(columns=rename)
 
     write_header = not (out_path.exists() and out_path.stat().st_size > 0)
@@ -514,7 +522,9 @@ class MBSWorkflow:
             {
                 self.contract.cusip_col: test_df[self.contract.cusip_col].values,
                 self.contract.date_col: test_df[self.contract.date_col].values,
-                f"{self.contract.target_col}_pred": y_pred,
+                # Output column is lowercase for readability; the source column
+                # in the panel is uppercase SMM_DECIMAL.
+                "smm_decimal_pred": y_pred,
             }
         )
         return {

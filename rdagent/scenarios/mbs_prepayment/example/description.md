@@ -30,7 +30,8 @@ respect MBS prepayment theory:
 ## Data Description
 
 - **Panel key**: `(cusip, fh_effdt)` — one row per CUSIP per month
-- **Target**: `smm_decimal ∈ [0, 1]` (stored unnormalized in the panel)
+- **Target**: `SMM_DECIMAL ∈ [0, 1]` (stored unnormalized in the panel —
+  column name is **uppercase** `"SMM_DECIMAL"`, not `"smm_decimal"`)
 - **Features**: every GNMA feature in `gnma_feature.md` is pre-built and
   **pre-normalized to mean 0 / std 1** in the shipped panel. The coder must
   not re-normalize or re-engineer them.
@@ -53,7 +54,8 @@ respect MBS prepayment theory:
 
 - `tfminput.pkl` — **single pickled DataFrame** containing the full
   CUSIP-level monthly panel (all cusips, all `fh_effdt` months, all
-  normalized features, and the unnormalized `smm_decimal` target). Load with:
+  normalized features, and the unnormalized `SMM_DECIMAL` target column).
+  Load with:
 
   ```python
   import pandas as pd
@@ -109,8 +111,9 @@ uniformity**, refi-incentive monotonicity, or regime-transition RMSE is a
 ## Submission Format
 
 The scaffold writes `submission.csv` with columns
-`(cusip, fh_effdt, smm_decimal_pred)` covering every holdout row
-(i.e. every row with `fh_effdt > 2024-10-31` in `tfminput.pkl`). Predictions
-are automatically clipped to `[0, 1]` by the scaffold. The coder only needs
-to provide a `build_model()` callable returning an unfitted
+`(cusip, fh_effdt, smm_decimal_pred)` for the fixed test-CUSIP set (~1/7 of
+all CUSIPs, all time rows, seed=42). The target column in the panel is
+**`SMM_DECIMAL`** (uppercase). Predictions are automatically clipped to
+`[0, 1]` by the scaffold. The coder only needs to provide a `build_model()`
+callable returning an unfitted
 sklearn-compatible estimator.

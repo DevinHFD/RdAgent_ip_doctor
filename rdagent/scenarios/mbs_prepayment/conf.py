@@ -79,7 +79,8 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # ------------------------------------------------------------------
     # 2. Data contract (Priority 2 - scaffold.py)
     # ------------------------------------------------------------------
-    target_column: str = "smm_decimal"
+    target_column: str = "SMM_DECIMAL"
+    """Exact column name of the target in tfminput.pkl — uppercase in the file."""
     target_min: float = 0.0
     target_max: float = 1.0
     cusip_col: str = "cusip"

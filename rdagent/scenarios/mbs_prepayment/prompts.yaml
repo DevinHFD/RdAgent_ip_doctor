@@ -125,13 +125,16 @@ component_spec:
       Do NOT use `pd.to_datetime(df["fh_effdt"])` without the format —
       it will silently misinterpret integers as nanoseconds-since-epoch.
     - All GNMA features are pre-normalized (mean 0, std 1).
-    - `smm_decimal` is NOT normalized — it is already in [0, 1].
+    - **`SMM_DECIMAL` is the target column** — it is uppercase in the file
+      and NOT normalized (it lives in [0, 1] already).
+      CRITICAL: the column is `"SMM_DECIMAL"`, NOT `"smm_decimal"`.
+      Using the wrong case will raise a KeyError at runtime.
 
     ### Required output schema
     Panel DataFrame keyed by `(cusip, fh_effdt)` with:
       - `cusip` (str): 9-char pool identifier
       - `fh_effdt` (int): factor-history effective date as YYYYMMDD integer
-      - `smm_decimal` (float in [0.0, 1.0]): target variable
+      - `SMM_DECIMAL` (float in [0.0, 1.0]): target variable — **uppercase**
       - `coupon` (float): CUSIP note rate
       - `wac` (float): weighted average coupon of underlying loans
       - `wam` (float): weighted average maturity
@@ -200,7 +203,7 @@ component_spec:
     - **Geography, servicer, channel, program**: see `gnma_feature.md`
 
     ### Constraints
-    - Must NOT normalize smm_decimal — it must remain in [0.0, 1.0]
+    - Must NOT normalize `SMM_DECIMAL` — it must remain in [0.0, 1.0]
     - Every new derived feature must have prepayment-theoretic
       justification — no blind feature generation
 
@@ -338,7 +341,7 @@ component_spec:
     - Computes per-coupon-bucket RMSE, regime-transition RMSE, and all
       other MBS scorecard metrics
     - Appends test-set rows (loop_number, cusip, fh_effdt, fh_upb,
-      smm_decimal, smm_decimal_pred) to `mbs_output/test_predictions_history.csv`
+      SMM_DECIMAL→smm_decimal, smm_decimal_pred) to `mbs_output/test_predictions_history.csv`
 
     ### Model fit() interface
     The scaffold calls your model as:

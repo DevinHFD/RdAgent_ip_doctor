@@ -36,7 +36,7 @@ def synthetic_panel() -> pd.DataFrame:
             "cusip": [f"CU{i:04d}" for i in rng.integers(0, 100, n)],
             "fh_effdt": dates.strftime("%Y%m%d").astype(int),
             "fh_upb": rng.uniform(1e6, 200e6, n),
-            "smm_decimal": np.clip(rng.uniform(0, 0.05, n), 0, 1),
+            "SMM_DECIMAL": np.clip(rng.uniform(0, 0.05, n), 0, 1),
         }
     )
     for f in GNMA_HARNESS_FEATURES:
@@ -73,7 +73,7 @@ def test_contract_rejects_forbidden_columns(synthetic_panel):
 @pytest.mark.offline
 def test_contract_rejects_out_of_range_target(synthetic_panel):
     df = synthetic_panel.copy()
-    df.loc[0, "smm_decimal"] = 1.5
+    df.loc[0, "SMM_DECIMAL"] = 1.5
     with pytest.raises(MBSContractViolation, match="out of range"):
         MBSDataContract().validate(df)
 
@@ -215,7 +215,7 @@ def test_workflow_end_to_end(synthetic_panel):
     assert len(result["y_true"]) == len(result["y_pred"])
     assert "WAC" in result["feature_columns"]
     sub = result["submission"]
-    assert list(sub.columns) == ["cusip", "fh_effdt", "smm_decimal_pred"]
+    assert list(sub.columns) == ["cusip", "fh_effdt", "smm_decimal_pred"]  # output always lowercase
     assert len(sub) == len(result["y_pred"])
     # Workflow returns all three splits.
     assert "train_df" in result
