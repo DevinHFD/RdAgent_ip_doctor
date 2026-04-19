@@ -81,6 +81,8 @@ class MBSEvaluationHarness:
     fh_effdt_col: str = "fh_effdt"
     cusip_col: str = "cusip"
     wala_col: str = "WALA"
+    upb_col: str = "fh_upb"
+    upb_weight_cap: float = 150_000_000.0
 
     def evaluate(
         self,
@@ -138,6 +140,12 @@ class MBSEvaluationHarness:
     ) -> dict[str, Any]:
         out: dict[str, Any] = {}
         out["overall_rmse"] = float(_rmse(y_true, y_pred))
+        # UPB-weighted RMSE — same loss as the SOTA MLP training objective.
+        # Always computed when fh_upb is present so the scorecard stays
+        # consistent regardless of whether a given loop used weighted loss.
+        if self.upb_col in features.columns:
+            upb = np.asarray(features[self.upb_col], dtype=float)
+            out["upb_weighted_rmse"] = float(_weighted_rmse(y_true, y_pred, upb, self.upb_weight_cap))
         out["rmse_by_coupon_bucket"] = self._rmse_by_coupon_bucket(y_true, y_pred, features)
         out["rmse_tail_high"] = float(_rmse_on_mask(y_true, y_pred, y_true >= np.quantile(y_true, 0.90)))
         out["rmse_tail_low"] = float(_rmse_on_mask(y_true, y_pred, y_true <= np.quantile(y_true, 0.10)))
@@ -268,6 +276,19 @@ class MBSEvaluationHarness:
             mean_by_cusip = by_cusip.groupby("cusip")["y_pred"].mean()
             out["cusip_differentiation_std"] = float(mean_by_cusip.std())
         return out
+
+
+def _weighted_rmse(
+    y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray, cap: float
+) -> float:
+    """UPB-weighted RMSE, capped at `cap` per observation (matches SOTA MLP loss)."""
+    w = np.minimum(np.where(np.isnan(weights), 0.0, weights), cap)
+    valid = ~(np.isnan(y_true) | np.isnan(y_pred)) & (w > 0)
+    if valid.sum() == 0:
+        return float("nan")
+    w_v = w[valid]
+    sq_err = (y_true[valid] - y_pred[valid]) ** 2
+    return float(np.sqrt(np.sum(w_v * sq_err) / np.sum(w_v)))
 
 
 def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:

@@ -601,9 +601,12 @@ def run_scaffold_pipeline(
     raw_feats = inverse_transform_features(
         test_df, scaler, workflow.contract.harness_raw_features
     )
+    extra_cols = [workflow.contract.cusip_col, workflow.contract.date_col]
+    if "fh_upb" in test_df.columns:
+        extra_cols.append("fh_upb")
     harness_features = pd.concat(
         [
-            test_df[[workflow.contract.cusip_col, workflow.contract.date_col]].reset_index(drop=True),
+            test_df[extra_cols].reset_index(drop=True),
             raw_feats.reset_index(drop=True),
         ],
         axis=1,
