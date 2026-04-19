@@ -228,7 +228,47 @@ class MBSPrepaymentScen(DataScienceScen):
         if memory_ctx:
             sections.append(memory_ctx)
 
-        # 4) Data contract reminder
+        # 4) MBS main.py mandate — overrides the generic share.yaml Workflow spec
+        # The DS loop injects share.yaml's Workflow spec which tells the LLM to
+        # write a standard Kaggle pipeline (load_data, feature, model_*, ensemble).
+        # That spec is wrong for MBS: main.py MUST call run_scaffold_pipeline().
+        sections.append(
+            "## MANDATORY: MBS main.py MUST use run_scaffold_pipeline()\n\n"
+            "**IGNORE** the generic Workflow spec about `load_data.py`, `feature.py`, "
+            "`feat_eng()`, `model_workflow()`, `ensemble.py`, KFold, or writing "
+            "`submission.csv` / `scores.csv` yourself. Those instructions are for "
+            "standard Kaggle competitions and DO NOT apply here.\n\n"
+            "For MBS Prepayment, `main.py` MUST follow this exact pattern:\n\n"
+            "```python\n"
+            "import os\n"
+            "from pathlib import Path\n"
+            "from rdagent.scenarios.mbs_prepayment.scaffold import run_scaffold_pipeline\n"
+            "from model_xx import build_model  # replace model_xx with actual model file\n\n"
+            'if __name__ == "__main__":\n'
+            '    data_dir = os.environ.get("DATA_DIR", ".")\n'
+            '    output_dir = "."\n'
+            "    result = run_scaffold_pipeline(\n"
+            "        panel_path=os.path.join(data_dir, \"tfminput.pkl\"),\n"
+            "        scaler_path=os.path.join(data_dir, \"scaler.sav\"),\n"
+            "        model_builder=build_model,\n"
+            "        output_dir=output_dir,\n"
+            "    )\n"
+            "    # Verify that run_scaffold_pipeline produced scores.json\n"
+            "    assert Path(output_dir, \"scores.json\").exists(), (\n"
+            '        "scores.json missing — run_scaffold_pipeline did not complete"\n'
+            "    )\n"
+            "```\n\n"
+            "The scaffold handles EVERYTHING: data loading, CUSIP split, model.fit() "
+            "with X_val/y_val/sample_weight, clipping, scoring, and writing ALL output "
+            "files (`submission.csv`, `scores.csv`, `scores.json`). "
+            "**Do NOT write any of those files yourself.** "
+            "If `scores.json` is missing after running, the experiment is FAILED.\n\n"
+            "Your `model_xx.py` file must expose a single `build_model()` function "
+            "that returns an unfitted sklearn-compatible estimator. That is the ONLY "
+            "thing main.py needs to import from your model file."
+        )
+
+        # 5) Data contract reminder
         sections.append(
             "## MBS Data Contract\n"
             f"- Inputs: `{MBSP_SETTINGS.panel_filename}` (pickled DataFrame) "
