@@ -540,6 +540,94 @@ class MBSWorkflow:
 
 
 # ---------------------------------------------------------------------------
+# Per-loop SMM actual-vs-predicted plot
+# ---------------------------------------------------------------------------
+
+_TRAIN_END_DATE = "2024-10-31"
+_UPB_WEIGHT_CAP = 150_000_000.0
+
+
+def _write_smm_plot(
+    output_dir: Path,
+    test_df: pd.DataFrame,
+    y_pred: "np.ndarray",
+    contract: "MBSDataContract",
+    scorecard: dict,
+) -> None:
+    """Save smm_actual_vs_pred.html to output_dir (Plotly, self-contained).
+
+    x-axis: fh_effdt (monthly dates)
+    y-axis: fh_upb-weighted average SMM_DECIMAL and smm_decimal_pred
+    Vertical line marks the train/val cutoff (2024-10-31).
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return  # plotly not installed — skip silently
+
+    df = test_df[[contract.date_col, contract.target_col]].copy().reset_index(drop=True)
+    df["smm_pred"] = np.asarray(y_pred, dtype=float)
+    upb_cap = _UPB_WEIGHT_CAP
+    if "fh_upb" in test_df.columns:
+        df["_w"] = np.minimum(test_df["fh_upb"].to_numpy(dtype=float), upb_cap)
+    else:
+        df["_w"] = 1.0
+    df["_date"] = pd.to_datetime(df[contract.date_col], format="%Y%m%d", errors="coerce")
+
+    def wavg(group):
+        w = group["_w"]
+        s = w.sum()
+        if s == 0:
+            return pd.Series({"smm_actual": float("nan"), "smm_pred": float("nan")})
+        return pd.Series(
+            {
+                "smm_actual": (group[contract.target_col] * w).sum() / s,
+                "smm_pred": (group["smm_pred"] * w).sum() / s,
+            }
+        )
+
+    agg = df.groupby("_date").apply(wavg).sort_index().reset_index()
+
+    overall_rmse = scorecard.get("accuracy", {}).get("overall_rmse", float("nan"))
+    oot_rmse = scorecard.get("accuracy", {}).get("oot_rmse", float("nan"))
+
+    cutoff = pd.Timestamp(_TRAIN_END_DATE)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=agg["_date"], y=agg["smm_actual"],
+            mode="lines", name="Actual SMM_DECIMAL",
+            line=dict(color="#1f77b4", width=1.8),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=agg["_date"], y=agg["smm_pred"],
+            mode="lines", name="Predicted smm_decimal",
+            line=dict(color="#ff7f0e", width=1.8, dash="dot"),
+        )
+    )
+    fig.add_vline(
+        x=cutoff.timestamp() * 1000,
+        line_width=1.5, line_dash="dash", line_color="grey",
+        annotation_text="Train cutoff", annotation_position="top left",
+    )
+    fig.update_layout(
+        title=(
+            f"UPB-Weighted Avg SMM — Actual vs Predicted<br>"
+            f"<sup>Overall RMSE: {overall_rmse:.5f} | OOT RMSE: {oot_rmse:.5f}</sup>"
+        ),
+        xaxis_title="Date (fh_effdt)",
+        yaxis_title="UPB-Weighted Avg SMM",
+        legend=dict(x=0.01, y=0.99),
+        template="plotly_white",
+        height=420,
+    )
+    fig.write_html(str(output_dir / "smm_actual_vs_pred.html"), include_plotlyjs="cdn")
+
+
+# ---------------------------------------------------------------------------
 # main.py entry point the RD-Agent Workflow component invokes
 # ---------------------------------------------------------------------------
 
@@ -616,6 +704,9 @@ def run_scaffold_pipeline(
         y_true=result["y_true"], y_pred=result["y_pred"], features=harness_features
     )
     write_scorecard(scorecard, str(output_dir / "scores.json"))
+
+    # Generate per-loop SMM actual-vs-predicted time-series plot.
+    _write_smm_plot(output_dir, test_df, result["y_pred"], used_contract, scorecard)
 
     primary_value = scorecard.get("primary_metric", {}).get("value", float("nan"))
     pd.DataFrame(

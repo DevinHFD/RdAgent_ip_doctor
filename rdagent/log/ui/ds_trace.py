@@ -509,6 +509,34 @@ def running_win(data, base_exp, llm_data=None, last_sota_exp=None):
             st.write(data["no_tag"].result)
         except AttributeError as e:  # Compatible with old versions
             st.write(data["no_tag"].__dict__["result"])
+
+        # MBS-specific: render SMM actual-vs-predicted plot if present.
+        try:
+            import streamlit.components.v1 as components
+
+            ws_path = data["no_tag"].experiment_workspace.workspace_path
+            plot_path = ws_path / "smm_actual_vs_pred.html"
+            if plot_path.exists():
+                st.subheader("SMM Actual vs Predicted (UPB-Weighted)")
+                scores_json_path = ws_path / "scores.json"
+                if scores_json_path.exists():
+                    import json as _json
+
+                    sc = _json.loads(scores_json_path.read_text())
+                    acc = sc.get("accuracy", {})
+                    col1, col2 = st.columns(2)
+                    col1.metric(
+                        "Overall UPB-Weighted RMSE",
+                        f"{acc.get('overall_rmse', float('nan')):.5f}",
+                    )
+                    col2.metric(
+                        "OOT UPB-Weighted RMSE (post-cutoff)",
+                        f"{acc.get('oot_rmse', float('nan')):.5f}",
+                    )
+                components.html(plot_path.read_text(encoding="utf-8"), height=450, scrolling=False)
+        except Exception:
+            pass
+
         mle_score_text = data.get("mle_score", "no submission to score")
         mle_score = extract_json(mle_score_text)
         st.subheader(

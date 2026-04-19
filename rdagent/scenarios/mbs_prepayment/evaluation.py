@@ -83,6 +83,9 @@ class MBSEvaluationHarness:
     wala_col: str = "WALA"
     upb_col: str = "fh_upb"
     upb_weight_cap: float = 150_000_000.0
+    #: Train/val cutoff — rows strictly after this date form the out-of-time (OOT)
+    #: evaluation window. Format: "YYYY-MM-DD". None disables OOT RMSE.
+    train_end_date: str | None = "2024-10-31"
 
     def evaluate(
         self,
@@ -147,6 +150,12 @@ class MBSEvaluationHarness:
 
         out: dict[str, Any] = {}
         out["overall_rmse"] = float(_rmse_w(y_true, y_pred, upb, self.upb_weight_cap))
+        # Out-of-time RMSE: only rows strictly after the train/val cutoff.
+        if self.train_end_date is not None and self.fh_effdt_col in features.columns:
+            cutoff = pd.Timestamp(self.train_end_date)
+            fh_dates = pd.to_datetime(features[self.fh_effdt_col], format="%Y%m%d", errors="coerce")
+            oot_mask = (fh_dates > cutoff).to_numpy()
+            out["oot_rmse"] = float(_rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, oot_mask))
         out["rmse_by_coupon_bucket"] = self._rmse_by_coupon_bucket(y_true, y_pred, features, upb)
         out["rmse_tail_high"] = float(
             _rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, y_true >= np.quantile(y_true, 0.90))
