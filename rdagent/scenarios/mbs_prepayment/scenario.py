@@ -241,19 +241,36 @@ class MBSPrepaymentScen(DataScienceScen):
         # 4) MBS main.py mandate — overrides the generic share.yaml Workflow spec
         # The DS loop injects share.yaml's Workflow spec which tells the LLM to
         # write a standard Kaggle pipeline (load_data, feature, model_*, ensemble).
-        # That spec is wrong for MBS: main.py MUST call run_scaffold_pipeline().
+        # That spec is wrong for MBS: main.py MUST call run_scaffold_pipeline()
+        # AND build_model must be defined inline in the same main.py because the
+        # pipeline coder only emits a single file per iteration.
         sections.append(
-            "## MANDATORY: MBS main.py MUST use run_scaffold_pipeline()\n\n"
+            "## MANDATORY: MBS main.py is a SINGLE self-contained file\n\n"
             "**IGNORE** the generic Workflow spec about `load_data.py`, `feature.py`, "
             "`feat_eng()`, `model_workflow()`, `ensemble.py`, KFold, or writing "
             "`submission.csv` / `scores.csv` yourself. Those instructions are for "
             "standard Kaggle competitions and DO NOT apply here.\n\n"
+            "**Critical constraint**: DS pipeline mode emits exactly ONE file per "
+            "iteration — `main.py`. No other file (no `model_gbm.py`, no "
+            "`ensemble.py`, no `model_*.py`) will be written to the workspace. "
+            "Therefore `main.py` MUST define `build_model()` inline — do NOT write "
+            "`from model_xx import build_model` or any other import of a non-stdlib "
+            "local module; that import will fail at runtime because the file does "
+            "not exist.\n\n"
             "For MBS Prepayment, `main.py` MUST follow this exact pattern:\n\n"
             "```python\n"
             "import os\n"
             "from pathlib import Path\n"
-            "from rdagent.scenarios.mbs_prepayment.scaffold import run_scaffold_pipeline\n"
-            "from model_xx import build_model  # replace model_xx with actual model file\n\n"
+            "from rdagent.scenarios.mbs_prepayment.scaffold import run_scaffold_pipeline\n\n"
+            "def build_model():\n"
+            '    """Return a fresh, unfitted estimator.\n\n'
+            "    Model hypotheses edit THIS function's body inline.\n"
+            "    Ensemble hypotheses rewrite this function to return a wrapper\n"
+            "    estimator whose sub-models are defined as helper classes/functions\n"
+            "    ABOVE this function in the same main.py. No separate files.\n"
+            '    """\n'
+            "    from sklearn.linear_model import Ridge\n"
+            "    return Ridge()\n\n"
             'if __name__ == "__main__":\n'
             '    data_dir = os.environ.get("DATA_DIR", ".")\n'
             '    output_dir = "."\n'
@@ -273,9 +290,10 @@ class MBSPrepaymentScen(DataScienceScen):
             "files (`submission.csv`, `scores.csv`, `scores.json`). "
             "**Do NOT write any of those files yourself.** "
             "If `scores.json` is missing after running, the experiment is FAILED.\n\n"
-            "Your `model_xx.py` file must expose a single `build_model()` function "
-            "that returns an unfitted sklearn-compatible estimator. That is the ONLY "
-            "thing main.py needs to import from your model file."
+            "`build_model()` must return an unfitted sklearn-compatible estimator "
+            "whose `.fit(X, y, X_val=..., y_val=..., sample_weight=...)` and "
+            "`.predict(X) -> np.ndarray` signatures match the scaffold's call "
+            "convention. All model / ensemble logic lives inline in main.py."
         )
 
         # 5) Data contract reminder

@@ -273,8 +273,18 @@ component_spec:
     a training weight.
 
     ### Interface
-    Implement a callable `build_model()` returning a fresh, unfitted estimator
-    with sklearn-compatible `.fit(X, y)` and `.predict(X) -> np.ndarray` methods.
+    A Model hypothesis does NOT create a new file. The DS pipeline coder
+    rewrites `main.py` as a single self-contained script, and your Model
+    hypothesis edits the inline `build_model()` function body inside
+    `main.py`. Do NOT produce `model_*.py`, `model_gbm.py`, or any
+    separate module — the pipeline emits one file per iteration and any
+    imports of local modules will fail at runtime.
+
+    Within `main.py`, define any supporting classes (e.g. a PyTorch
+    `nn.Module` subclass and its sklearn-style wrapper) ABOVE the
+    `build_model` function. `build_model()` itself returns a fresh,
+    unfitted estimator with sklearn-compatible `.fit(X, y)` and
+    `.predict(X) -> np.ndarray` methods.
 
     ### Available packages (confirmed installed)
     - **scikit-learn**: `GradientBoostingRegressor`, `RandomForestRegressor`,
@@ -340,13 +350,30 @@ component_spec:
     any of the above steps yourself.
 
     ### Required main.py structure
+    The DS pipeline coder emits exactly ONE file per iteration: `main.py`.
+    No other file (no `model_*.py`, no `ensemble.py`, no `load_data.py`,
+    no `feature.py`) is written. Therefore `build_model()` MUST be
+    defined inline in `main.py` — never import it from another local
+    module, because that module will not exist on disk.
+
     ```python
     import os
     from pathlib import Path
+
     from rdagent.scenarios.mbs_prepayment.scaffold import run_scaffold_pipeline
 
-    # Import build_model from the LLM-generated model file
-    from model_xx import build_model  # adjust filename to actual model_*.py
+
+    def build_model():
+        """Return a fresh, unfitted estimator.
+
+        Model hypotheses edit THIS function's body inline.
+        Ensemble hypotheses rewrite this function to return a wrapper
+        estimator whose sub-models are defined as helper classes/functions
+        ABOVE this function in the same main.py. No separate files.
+        """
+        from sklearn.linear_model import Ridge
+        return Ridge()
+
 
     if __name__ == "__main__":
         data_dir = os.environ.get("DATA_DIR", ".")
@@ -422,17 +449,31 @@ component_spec:
     - Do NOT parse `fh_effdt` without `format="%Y%m%d"`
 
     ### What you CAN do
-    - Import model files dynamically (`model_*.py`)
-    - Pass the correct `build_model` callable to `run_scaffold_pipeline`
-    - Print progress messages with `print()` (NOT `logging` module)
-    - Handle multiple models by calling the scaffold once per model if
-      needed, but the ensemble strategy should be in `ensemble.py`
+    - Define `build_model` and any helper classes (e.g. a PyTorch
+      `nn.Module` and its sklearn-style wrapper) inline in `main.py`
+    - Pass `build_model` (the inline callable) to `run_scaffold_pipeline`
+    - Print progress messages with `print()` (NOT the `logging` module)
+    - For ensembles, define each sub-model as a helper class/function
+      ABOVE `build_model` and have `build_model` return a wrapper that
+      fits and averages them inside its own `.fit()` / `.predict()` — all
+      in the same `main.py`. Do NOT split ensemble logic into a separate
+      file. Do NOT call `run_scaffold_pipeline` more than once per run.
 
   Ensemble: |
     ## Ensemble Specification (MBS Prepayment)
 
     Combine predictions from multiple prepayment models into a single
     `build_model()` object that the scaffold fits once.
+
+    ### File and interface
+    An Ensemble hypothesis does NOT create a new file. The DS pipeline
+    coder rewrites `main.py` as a single self-contained script, so your
+    Ensemble hypothesis edits the inline `build_model()` inside `main.py`
+    to return a wrapper estimator. Sub-models live as helper classes /
+    functions defined ABOVE `build_model` in the same `main.py`. Do NOT
+    produce `ensemble.py`, `model_*.py`, or any separate module — the
+    pipeline emits one file per iteration and local-module imports will
+    fail at runtime.
 
     ### Requirements
     - Each model in the ensemble MUST have a **distinct architecture**
