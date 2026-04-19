@@ -138,24 +138,33 @@ class MBSEvaluationHarness:
     def _accuracy_dimensions(
         self, y_true: np.ndarray, y_pred: np.ndarray, features: pd.DataFrame
     ) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        out["overall_rmse"] = float(_rmse(y_true, y_pred))
-        # UPB-weighted RMSE — same loss as the SOTA MLP training objective.
-        # Always computed when fh_upb is present so the scorecard stays
-        # consistent regardless of whether a given loop used weighted loss.
+        # Extract UPB weights once; all RMSE metrics use the same weighting
+        # convention (min(fh_upb, cap)) to stay consistent with the SOTA MLP
+        # training loss. Falls back to uniform weights when fh_upb is absent.
+        upb: np.ndarray | None = None
         if self.upb_col in features.columns:
             upb = np.asarray(features[self.upb_col], dtype=float)
-            out["upb_weighted_rmse"] = float(_weighted_rmse(y_true, y_pred, upb, self.upb_weight_cap))
-        out["rmse_by_coupon_bucket"] = self._rmse_by_coupon_bucket(y_true, y_pred, features)
-        out["rmse_tail_high"] = float(_rmse_on_mask(y_true, y_pred, y_true >= np.quantile(y_true, 0.90)))
-        out["rmse_tail_low"] = float(_rmse_on_mask(y_true, y_pred, y_true <= np.quantile(y_true, 0.10)))
-        out["rmse_by_vintage"] = self._rmse_by_vintage(y_true, y_pred, features)
+
+        out: dict[str, Any] = {}
+        out["overall_rmse"] = float(_rmse_w(y_true, y_pred, upb, self.upb_weight_cap))
+        out["rmse_by_coupon_bucket"] = self._rmse_by_coupon_bucket(y_true, y_pred, features, upb)
+        out["rmse_tail_high"] = float(
+            _rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, y_true >= np.quantile(y_true, 0.90))
+        )
+        out["rmse_tail_low"] = float(
+            _rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, y_true <= np.quantile(y_true, 0.10))
+        )
+        out["rmse_by_vintage"] = self._rmse_by_vintage(y_true, y_pred, features, upb)
         return out
 
     def _rmse_by_coupon_bucket(
-        self, y_true: np.ndarray, y_pred: np.ndarray, features: pd.DataFrame
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        features: pd.DataFrame,
+        upb: np.ndarray | None,
     ) -> dict[str, float]:
-        """Per-coupon-bucket RMSE — the critical new metric for MBS.
+        """Per-coupon-bucket UPB-weighted RMSE.
 
         High-coupon (deeply in-the-money) buckets drive most of the refi risk.
         A model with good overall RMSE but terrible high-coupon RMSE is
@@ -168,16 +177,17 @@ class MBSEvaluationHarness:
         for lo, hi in self.coupon_buckets:
             mask = (coupons >= lo) & (coupons < hi)
             label = f"{lo:.1f}-{hi:.1f}" if hi < 99 else f"{lo:.1f}+"
-            if mask.sum() == 0:
-                result[label] = float("nan")
-            else:
-                result[label] = float(_rmse(y_true[mask], y_pred[mask]))
+            result[label] = float(_rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, mask))
         return result
 
     def _rmse_by_vintage(
-        self, y_true: np.ndarray, y_pred: np.ndarray, features: pd.DataFrame
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        features: pd.DataFrame,
+        upb: np.ndarray | None,
     ) -> dict[str, float]:
-        """Per-vintage-year RMSE, inferred from WALA and fh_effdt."""
+        """Per-vintage-year UPB-weighted RMSE, inferred from WALA and fh_effdt."""
         if self.wala_col not in features.columns or self.fh_effdt_col not in features.columns:
             return {}
         fh = pd.to_datetime(features[self.fh_effdt_col], format="%Y%m%d", errors="coerce")
@@ -187,7 +197,7 @@ class MBSEvaluationHarness:
         for v in np.unique(vintage_year[~np.isnan(vintage_year)]):
             mask = vintage_year == v
             if mask.sum() >= 30:
-                result[str(int(v))] = float(_rmse(y_true[mask], y_pred[mask]))
+                result[str(int(v))] = float(_rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, mask))
         return result
 
     # --- Rate sensitivity fidelity ---------------------------------------
@@ -219,6 +229,9 @@ class MBSEvaluationHarness:
         if self.fh_effdt_col not in features.columns:
             return {"_error": f"feature '{self.fh_effdt_col}' not found"}
         fh = pd.to_datetime(features[self.fh_effdt_col], format="%Y%m%d", errors="coerce")
+        upb: np.ndarray | None = None
+        if self.upb_col in features.columns:
+            upb = np.asarray(features[self.upb_col], dtype=float)
 
         # Regime transition RMSE: first 3 months after each known transition
         regime_rmses: dict[str, float] = {}
@@ -227,7 +240,7 @@ class MBSEvaluationHarness:
             mask = (fh >= t) & (fh < t + pd.DateOffset(months=3))
             mask_arr = mask.to_numpy()
             if mask_arr.sum() >= 10:
-                regime_rmses[t_str] = float(_rmse(y_true[mask_arr], y_pred[mask_arr]))
+                regime_rmses[t_str] = float(_rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, mask_arr))
         out["regime_transition_rmse"] = regime_rmses
 
         # Rolling 12-month RMSE stability
@@ -278,11 +291,19 @@ class MBSEvaluationHarness:
         return out
 
 
-def _weighted_rmse(
-    y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray, cap: float
+def _rmse_w(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    upb: np.ndarray | None,
+    cap: float,
 ) -> float:
-    """UPB-weighted RMSE, capped at `cap` per observation (matches SOTA MLP loss)."""
-    w = np.minimum(np.where(np.isnan(weights), 0.0, weights), cap)
+    """UPB-weighted RMSE. Falls back to unweighted when upb is None."""
+    if upb is None:
+        valid = ~(np.isnan(y_true) | np.isnan(y_pred))
+        if valid.sum() == 0:
+            return float("nan")
+        return float(np.sqrt(np.mean((y_true[valid] - y_pred[valid]) ** 2)))
+    w = np.minimum(np.where(np.isnan(upb), 0.0, upb), cap)
     valid = ~(np.isnan(y_true) | np.isnan(y_pred)) & (w > 0)
     if valid.sum() == 0:
         return float("nan")
@@ -291,17 +312,17 @@ def _weighted_rmse(
     return float(np.sqrt(np.sum(w_v * sq_err) / np.sum(w_v)))
 
 
-def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    valid = ~(np.isnan(y_true) | np.isnan(y_pred))
-    if valid.sum() == 0:
-        return float("nan")
-    return float(np.sqrt(np.mean((y_true[valid] - y_pred[valid]) ** 2)))
-
-
-def _rmse_on_mask(y_true: np.ndarray, y_pred: np.ndarray, mask: np.ndarray) -> float:
+def _rmse_w_on_mask(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    upb: np.ndarray | None,
+    cap: float,
+    mask: np.ndarray,
+) -> float:
     if mask.sum() == 0:
         return float("nan")
-    return _rmse(y_true[mask], y_pred[mask])
+    upb_m = upb[mask] if upb is not None else None
+    return _rmse_w(y_true[mask], y_pred[mask], upb_m, cap)
 
 
 def _spearman(x: np.ndarray, y: np.ndarray) -> float:
