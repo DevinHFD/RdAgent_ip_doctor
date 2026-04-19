@@ -83,32 +83,59 @@ class ComputeBudget:
         }
 
 
+def _build_default_budgets() -> dict[Stage, ComputeBudget]:
+    """Construct per-stage budgets from ``MBSP_SETTINGS`` at import time.
+
+    Per-stage timeouts / memory / GPU flags come from ``MBSPrepaymentSettings``
+    so that ``MBSP_STAGE_TRAINING_TIMEOUT`` (etc.) in ``.env`` actually takes
+    effect. ``max_retries`` and ``cpu_count`` remain hard-coded here because
+    they are structural, not workload-tunable.
+    """
+    from rdagent.scenarios.mbs_prepayment.conf import MBSP_SETTINGS
+
+    return {
+        Stage.DATA_LOAD: ComputeBudget(
+            stage=Stage.DATA_LOAD,
+            timeout_seconds=MBSP_SETTINGS.stage_data_load_timeout,
+            memory_limit_gb=MBSP_SETTINGS.stage_data_load_memory_gb,
+            allow_gpu=False, max_retries=1, cpu_count=4,
+        ),
+        Stage.FEATURE_ENG: ComputeBudget(
+            stage=Stage.FEATURE_ENG,
+            timeout_seconds=MBSP_SETTINGS.stage_feature_eng_timeout,
+            memory_limit_gb=MBSP_SETTINGS.stage_feature_eng_memory_gb,
+            allow_gpu=False, max_retries=0, cpu_count=8,
+        ),
+        Stage.TRAINING: ComputeBudget(
+            stage=Stage.TRAINING,
+            timeout_seconds=MBSP_SETTINGS.stage_training_timeout,
+            memory_limit_gb=MBSP_SETTINGS.stage_training_memory_gb,
+            allow_gpu=MBSP_SETTINGS.stage_training_allow_gpu,
+            max_retries=1, cpu_count=8,
+        ),
+        Stage.EVALUATION: ComputeBudget(
+            stage=Stage.EVALUATION,
+            timeout_seconds=MBSP_SETTINGS.stage_evaluation_timeout,
+            memory_limit_gb=MBSP_SETTINGS.stage_evaluation_memory_gb,
+            allow_gpu=False, max_retries=0, cpu_count=4,
+        ),
+        Stage.ATTRIBUTION: ComputeBudget(
+            stage=Stage.ATTRIBUTION,
+            timeout_seconds=MBSP_SETTINGS.stage_attribution_timeout,
+            memory_limit_gb=MBSP_SETTINGS.stage_attribution_memory_gb,
+            allow_gpu=MBSP_SETTINGS.stage_attribution_allow_gpu,
+            max_retries=0, cpu_count=4,
+        ),
+    }
+
+
 #: Default budgets tuned for MBS workloads. Feature engineering is tight
 #: (most runs should be <60s — if a feature function takes 10 minutes it's
 #: a bug). Training has the most generous budget and is the only stage
 #: allowed to touch the GPU. Evaluation is CPU-bound metric computation.
-DEFAULT_BUDGETS: dict[Stage, ComputeBudget] = {
-    Stage.DATA_LOAD: ComputeBudget(
-        stage=Stage.DATA_LOAD, timeout_seconds=300, memory_limit_gb=16.0,
-        allow_gpu=False, max_retries=1, cpu_count=4,
-    ),
-    Stage.FEATURE_ENG: ComputeBudget(
-        stage=Stage.FEATURE_ENG, timeout_seconds=600, memory_limit_gb=24.0,
-        allow_gpu=False, max_retries=0, cpu_count=8,
-    ),
-    Stage.TRAINING: ComputeBudget(
-        stage=Stage.TRAINING, timeout_seconds=3600, memory_limit_gb=32.0,
-        allow_gpu=True, max_retries=1, cpu_count=8,
-    ),
-    Stage.EVALUATION: ComputeBudget(
-        stage=Stage.EVALUATION, timeout_seconds=300, memory_limit_gb=8.0,
-        allow_gpu=False, max_retries=0, cpu_count=4,
-    ),
-    Stage.ATTRIBUTION: ComputeBudget(
-        stage=Stage.ATTRIBUTION, timeout_seconds=900, memory_limit_gb=16.0,
-        allow_gpu=True, max_retries=0, cpu_count=4,
-    ),
-}
+#: Timeouts / memory / GPU flags are sourced from ``MBSP_SETTINGS`` so
+#: ``.env`` overrides (e.g. ``MBSP_STAGE_TRAINING_TIMEOUT=10800``) apply.
+DEFAULT_BUDGETS: dict[Stage, ComputeBudget] = _build_default_budgets()
 
 
 def get_budget(stage: Stage, overrides: dict[Stage, ComputeBudget] | None = None) -> ComputeBudget:

@@ -569,7 +569,7 @@ hypothesis_select:
     Please note: you are operating under a time budget dedicated to ensemble training of {{res_time}} hours, and the maximum allowed time is {{full_time}} hours.
 
     Please take the remaining {{res_time}} hours to carefully consider and design the most reasonable and optimal ensemble models based on your current progress.
-    Assume training a single model takes about 1 hour. For example, if you have roughly twice that time left, you can try training multiple models with different random seeds or data splits to reuse time effectively.
+    {% if time_max is defined and time_max > 0 %}Assume training a single model takes about {{ time_max }} hours (observed from prior successful runs in this session).{% else %}Assume training a single model consumes a meaningful share of the {{ full_time }}-hour total budget; calibrate the per-model budget from the first successful run.{% endif %} For example, if you have roughly twice that per-model time left, you can try training multiple models with different random seeds or data splits to reuse time effectively.
     If you have more time, you might consider training a multi-fold ensemble. Use your judgment to decide how many folds or seeds fit within your remaining time budget.
 
     ### 2. Training-Time Resource Allocation
