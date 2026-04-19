@@ -328,6 +328,7 @@ component_spec:
     ### Required main.py structure
     ```python
     import os
+    from pathlib import Path
     from rdagent.scenarios.mbs_prepayment.scaffold import run_scaffold_pipeline
 
     # Import build_model from the LLM-generated model file
@@ -335,11 +336,19 @@ component_spec:
 
     if __name__ == "__main__":
         data_dir = os.environ.get("DATA_DIR", ".")
+        output_dir = "."
         result = run_scaffold_pipeline(
             panel_path=os.path.join(data_dir, "tfminput.pkl"),
             scaler_path=os.path.join(data_dir, "scaler.sav"),
             model_builder=build_model,
-            output_dir=".",
+            output_dir=output_dir,
+        )
+        # MANDATORY: verify that run_scaffold_pipeline wrote scores.json.
+        # If this assertion fires, the scaffold call above failed or was
+        # not reached — do NOT attempt to write scores.json yourself.
+        assert Path(output_dir, "scores.json").exists(), (
+            "scores.json was not created by run_scaffold_pipeline — "
+            "check that the scaffold ran without exceptions."
         )
     ```
 
@@ -384,7 +393,11 @@ component_spec:
 
     ### What you MUST NOT do
     - Do NOT implement your own train/val/test split or date parsing
-    - Do NOT write your own `scores.csv` or `submission.csv` logic
+    - **CRITICAL: Do NOT write `scores.json`, `scores.csv`, or
+      `submission.csv` yourself.** All three files are produced exclusively
+      by `run_scaffold_pipeline()`. If you write `scores.csv` manually,
+      `scores.json` will NOT be created and the experiment will be marked
+      as FAILED by the evaluation harness.
     - Do NOT implement debug mode, argparse, or data sampling
     - Do NOT use `mean_squared_error(..., squared=False)` — use
       `np.sqrt(mean_squared_error(...))` if you need RMSE anywhere
