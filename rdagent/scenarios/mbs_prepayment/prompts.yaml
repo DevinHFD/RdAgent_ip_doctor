@@ -70,7 +70,9 @@ hypothesis_specification: |
   5. Every feature-engineering hypothesis must state the expected impact on
      per-coupon-bucket RMSE, not just overall RMSE. A model that improves
      overall RMSE but degrades high-coupon-bucket RMSE is worse, not better,
-     because high-coupon CUSIPs drive refi risk.
+     because high-coupon CUSIPs drive refi risk. All RMSE metrics in the
+     scorecard are fh_upb-weighted (fh_upb capped at 150M per pool) — there
+     is no unweighted RMSE in the evaluation.
 
 scenario_description: |
   # MBS CUSIP-Level Prepayment Forecasting
@@ -92,11 +94,13 @@ scenario_description: |
   Your code MUST NOT implement its own split.
 
   ## Primary Metric
-  **RMSE of SMM_DECIMAL** — overall, plus per-coupon-bucket breakdowns.
-  Per-coupon-bucket RMSE is critical because prepayment behavior is heavily
-  coupon-dependent and high-coupon buckets drive refi risk.
+  **fh_upb-weighted RMSE of SMM_DECIMAL** (fh_upb capped at 150M per pool) —
+  overall, plus per-coupon-bucket breakdowns. Per-coupon-bucket RMSE is
+  critical because prepayment behavior is heavily coupon-dependent and
+  high-coupon buckets drive refi risk.
 
   ## Evaluation Hierarchy (reported by MBSEvaluationHarness)
+  All RMSE metrics below are fh_upb-weighted (fh_upb capped at 150M).
   1. Accuracy: overall_rmse, rmse_by_coupon_bucket, rmse_tail_high/low,
      rmse_by_vintage
   2. Rate Sensitivity Fidelity: s_curve_r2, inflection_point_bps
@@ -278,6 +282,9 @@ component_spec:
       - For RMSE: use `np.sqrt(mean_squared_error(y_true, y_pred))`.
         Do NOT use `mean_squared_error(..., squared=False)` — it is
         unsupported in the installed scikit-learn version.
+      - For UPB-weighted RMSE (matches the scorecard convention), pass
+        `sample_weight=np.minimum(fh_upb, 150e6)` to `mean_squared_error`:
+        `np.sqrt(mean_squared_error(y_true, y_pred, sample_weight=w))`.
     - **XGBoost**: `xgboost.XGBRegressor`
       - Set `early_stopping_rounds` in the **constructor**, NOT in `.fit()`.
       - Use `eval_set=[(X_val, y_val)]` in `.fit()` for early stopping.
@@ -303,7 +310,8 @@ component_spec:
       The runtime hard limit is **3 hours**. A 500-tree LightGBM on the
       full panel takes ~45 min; start with 100–200 trees and scale up.
       For PyTorch MLPs, use mini-batch training (batch_size ≥ 4096) with
-      an early-stopping callback on validation RMSE.
+      an early-stopping callback on UPB-weighted validation RMSE (weights:
+      `np.minimum(fh_upb_val, 150e6)`).
 
   ScenarioValidator: |
     ## ScenarioValidator Specification
@@ -371,8 +379,9 @@ component_spec:
       sample_weight=min(fh_upb, 150M))` — see model interface below
     - Clips predictions to [0, 1]
     - Writes `submission.csv`, `scores.json`, `scores.csv`
-    - Computes per-coupon-bucket RMSE, regime-transition RMSE, and all
-      other MBS scorecard metrics
+    - Computes UPB-weighted per-coupon-bucket RMSE, UPB-weighted
+      regime-transition RMSE, and all other MBS scorecard metrics
+      (fh_upb capped at 150M)
     - Appends test-set rows (loop_number, cusip, fh_effdt, fh_upb,
       SMM_DECIMAL→smm_decimal, smm_decimal_pred) to `mbs_output/test_predictions_history.csv`
 
@@ -406,7 +415,9 @@ component_spec:
       as FAILED by the evaluation harness.
     - Do NOT implement debug mode, argparse, or data sampling
     - Do NOT use `mean_squared_error(..., squared=False)` — use
-      `np.sqrt(mean_squared_error(...))` if you need RMSE anywhere
+      `np.sqrt(mean_squared_error(...))` if you need RMSE anywhere. For
+      UPB-weighted RMSE (scorecard convention), pass
+      `sample_weight=np.minimum(fh_upb, 150e6)`.
     - Do NOT call `train_test_split` from sklearn
     - Do NOT parse `fh_effdt` without `format="%Y%m%d"`
 
@@ -427,11 +438,16 @@ component_spec:
     - Each model in the ensemble MUST have a **distinct architecture**
       (e.g., LightGBM + XGBoost + Ridge). Do NOT duplicate the same
       model type — 3× LightGBM with different seeds is NOT an ensemble.
-    - Ensemble weights should be tuned on validation RMSE inside the
-      ensemble model's own `fit(X, y, X_val=X_val, y_val=y_val,
-      sample_weight=...)` method — the scaffold passes all three.
-    - Use `np.sqrt(mean_squared_error(y_true, y_pred))` if you need RMSE
-      internally. Do NOT use `mean_squared_error(..., squared=False)`.
+    - Ensemble weights should be tuned on **UPB-weighted validation RMSE**
+      (fh_upb capped at 150M) inside the ensemble model's own
+      `fit(X, y, X_val=X_val, y_val=y_val, sample_weight=...)` method — the
+      scaffold passes all three. The `sample_weight` kwarg carries the
+      training UPB weights; for val-set RMSE you must reconstruct weights
+      from `X_val["fh_upb"]` (cap at 150M) and pass them to
+      `mean_squared_error`. Do NOT tune ensemble weights on unweighted RMSE.
+    - Use `np.sqrt(mean_squared_error(y_true, y_pred, sample_weight=w))`
+      if you need UPB-weighted RMSE internally (scorecard convention).
+      Do NOT use `mean_squared_error(..., squared=False)`.
 
     ### CRITICAL — output file ownership
     - **Do NOT write `scores.csv`, `scores.json`, or `submission.csv`**
