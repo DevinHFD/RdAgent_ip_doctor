@@ -465,14 +465,16 @@ MBSPrepaymentRDLoop.feedback()                                 [mbs_prepayment/l
 │           │   ├── T("scenarios.data_science.dev.prompts:exp_feedback.user")
 │           │   │   └── SOTA desc, current exp code/results, diff
 │           │   ├── + mbs_scorecard_text                       ← scores.json (per-coupon, monotonicity)
-│           │   ├── + mbs_memory_text                          ← MBS memory FEEDBACK phase context
-│           │   └── + mbs_schema_extra                         ← feedback_schema_extra from prompts.yaml
-│           │       (rate_sensitivity_check, burnout_check, coupon_bucket_check, etc.)
+│           │   └── + mbs_memory_text                          ← MBS memory FEEDBACK phase context
 │           │
 │           ├── APIBackend().build_messages_and_create_chat_completion()  ← LLM call (feedback)
 │           │   → JSON with: Observations, Feedback for Hypothesis,
-│           │     Replace Best Result, rate_sensitivity_check, burnout_check,
-│           │     coupon_bucket_check, temporal_stability, extreme_regime_check
+│           │     New Hypothesis, Reasoning, Code Change Summary,
+│           │     Replace Best Result, EDA Improvement, Acceptable
+│           │     (MBS-specific checks — burnout, per-coupon uniformity,
+│           │     regime robustness — are surfaced deterministically via
+│           │     the scorecard and reasoned about inline in Observations
+│           │     / Feedback for Hypothesis)
 │           │
 │           └── returns HypothesisFeedback(decision, reason, ...)
 ```

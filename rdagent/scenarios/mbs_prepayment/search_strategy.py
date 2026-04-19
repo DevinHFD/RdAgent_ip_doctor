@@ -61,6 +61,23 @@ COMPONENT_PREREQUISITES: dict[str, list[str]] = {
 }
 
 
+#: Translation from MBS-native component names (richer, 7-name domain
+#: taxonomy) to the 5 DS proposal-schema names the LLM can actually emit
+#: in its structured ``component`` field. Used when surfacing MBS
+#: allowlists / blocklists to the proposal LLM so the LLM knows which
+#: DS label to select. Internal MBS bookkeeping (memory, search state,
+#: orchestration) continues to use the MBS-native names.
+MBS_TO_DS_COMPONENT: dict[str, str] = {
+    "DataLoader": "DataLoadSpec",
+    "RateCurveFeatures": "FeatureEng",
+    "PoolDynamics": "FeatureEng",
+    "MacroFeatures": "FeatureEng",
+    "PrepaymentModel": "Model",
+    "ScenarioValidator": "Workflow",
+    "Ensemble": "Ensemble",
+}
+
+
 @dataclass
 class IterationRecord:
     iteration: int
@@ -254,13 +271,17 @@ def decide_next_iteration(state: MBSSearchState) -> HypothesisFilter:
 
 def format_filter_for_prompt(filt: HypothesisFilter) -> str:
     """Render the filter as a Markdown block for injection into hypothesis_gen."""
+    ds_allowed = sorted({MBS_TO_DS_COMPONENT.get(c, c) for c in filt.allowed_components})
     lines = [
         "## Search Strategy Constraints (enforce these in your hypothesis)",
         f"**Mode**: {filt.mode.value}",
-        f"**Allowed components**: {', '.join(filt.allowed_components) if filt.allowed_components else '(none — propose a baseline)'}",
+        f"**MBS focus areas** (for hypothesis content): "
+        f"{', '.join(filt.allowed_components) if filt.allowed_components else '(none — propose a baseline)'}",
+        f"**Allowed DS components** (for the `component` field in your "
+        f"structured output): {', '.join(ds_allowed) if ds_allowed else '(none)'}",
     ]
     if filt.blocked_components:
-        lines.append("**Blocked components**:")
+        lines.append("**Blocked MBS areas**:")
         for comp, reason in filt.blocked_components.items():
             lines.append(f"  - {comp}: {reason}")
     lines.append(f"\n**Guidance**: {filt.guidance}")

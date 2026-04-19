@@ -36,8 +36,11 @@ scen:
 
     You never propose generic ML approaches without prepayment-theoretic
     justification, and you always account for the panel structure of the data:
-    each observation is keyed by (cusip, fh_effdt) and the train/test split
-    must be strictly temporal on fh_effdt to prevent look-ahead bias.
+    each observation is keyed by (cusip, fh_effdt). The scaffold performs a
+    fixed CUSIP-stratified split (Test = 1/7 of CUSIPs holding ALL time rows;
+    Train/Val = 80/20 of the remaining CUSIPs restricted to fh_effdt ≤
+    train_end_date) with a fixed seed, so every loop sees the same partition.
+    You MUST NOT implement your own split — the scaffold owns it.
 
 hypothesis_specification: |
   Every hypothesis you propose must satisfy ALL of the following:
@@ -82,8 +85,11 @@ scenario_description: |
   Each observation is keyed by `(cusip, fh_effdt)` where:
     - `cusip`: 9-character identifier for an agency MBS pool
     - `fh_effdt`: factor-history effective date (month-end)
-  The data is a panel (CUSIPs × dates). The train/test split MUST be strictly
-  temporal on `fh_effdt` — never random, never stratified by CUSIP.
+  The data is a panel (CUSIPs × dates). The scaffold performs a fixed
+  CUSIP-stratified split (Test = 1/7 of CUSIPs holding ALL time rows;
+  Train/Val = 80/20 of the remaining CUSIPs restricted to
+  fh_effdt ≤ train_end_date) with a fixed seed — identical every loop.
+  Your code MUST NOT implement its own split.
 
   ## Primary Metric
   **RMSE of SMM_DECIMAL** — overall, plus per-coupon-bucket breakdowns.
@@ -117,40 +123,40 @@ component_spec:
   DataLoader: |
     ## DataLoader Specification
 
-    Load CUSIP-level MBS panel data plus macro time series and join on
-    fh_effdt (with at least 1-month lag on all macro features).
+    **Data loading is owned by the scaffold — you do NOT write a loader.**
+    `run_scaffold_pipeline()` (see the Workflow spec) reads `tfminput.pkl`
+    and `scaler.sav`, parses `fh_effdt`, validates the data contract, and
+    performs the CUSIP-stratified split. Your only interaction with the
+    raw data is through the features that arrive in `X_train, X_val,
+    X_test` inside your model's `fit()` / `predict()` methods.
 
-    ### Data format
-    - `tfminput.pkl` is the single panel pickle.
-    - `fh_effdt` is stored as **integer YYYYMMDD** (e.g., `20241031`).
-      To parse: `pd.to_datetime(df["fh_effdt"], format="%Y%m%d")`.
-      Do NOT use `pd.to_datetime(df["fh_effdt"])` without the format —
-      it will silently misinterpret integers as nanoseconds-since-epoch.
-    - All GNMA features are pre-normalized (mean 0, std 1).
-    - **`SMM_DECIMAL` is the target column** — it is uppercase in the file
-      and NOT normalized (it lives in [0, 1] already).
-      CRITICAL: the column is `"SMM_DECIMAL"`, NOT `"smm_decimal"`.
-      Using the wrong case will raise a KeyError at runtime.
+    ### What the scaffold loads for you
+    - `tfminput.pkl` — single pickled panel DataFrame, keyed by
+      (`cusip`, `fh_effdt`).
+    - `fh_effdt` is parsed from integer YYYYMMDD (e.g. `20241031`) via
+      `pd.to_datetime(..., format="%Y%m%d")`.
+    - `SMM_DECIMAL` (uppercase, unnormalized, in [0, 1]) is the target.
+    - All ~62 GNMA feature columns are **already normalized** (mean 0,
+      std 1). Column names are uppercase / PascalCase exactly as
+      documented in `example/gnma_feature.md` — e.g. `WAC`, `WALA`,
+      `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`,
+      `Burnout_Prop_WAC_30yr_log_sum60`, `CLTV`, `SATO`, `Orig_FICO`.
+    - `fh_upb` (raw unpaid principal balance) is present as a feature
+      column and is ALSO used as the training sample weight
+      (`sample_weight = min(fh_upb, 150M)`) — see the PrepaymentModel spec.
 
-    ### Required output schema
-    Panel DataFrame keyed by `(cusip, fh_effdt)` with:
-      - `cusip` (str): 9-char pool identifier
-      - `fh_effdt` (int): factor-history effective date as YYYYMMDD integer
-      - `SMM_DECIMAL` (float in [0.0, 1.0]): target variable — **uppercase**
-      - `coupon` (float): CUSIP note rate
-      - `wac` (float): weighted average coupon of underlying loans
-      - `wam` (float): weighted average maturity
-      - `wala` (float): weighted average loan age (months)
-      - `rate_incentive` (float): WAC - current mortgage rate (percent)
-      - macro columns: `mortgage_rate_lag1m`, `treasury_10y_lag1m`,
-        `unemployment_lag1m`, `hpi_lag1m`
+    ### Forbidden columns (scaffold will reject the panel)
+    - `CPR_DECIMAL` — annualised form of the target: `CPR = 1 - (1 - SMM)^12`.
+      Direct target leakage.
+    - Any forward-looking feature: `future_smm`, `forward_smm`,
+      `next_month_smm`, `forward_rate`, `future_rate_incentive`.
 
-    ### Constraints
-    - NO same-fh_effdt macro joins. Every macro feature must be lagged by at
-      least 1 month (column name should encode the lag, e.g., `_lag1m`).
-    - Do NOT drop CUSIPs with missing intermediate months — forward-fill or
-      preserve NaN so survivorship bias is not introduced.
-    - Do NOT shuffle. Preserve natural (cusip, fh_effdt) ordering.
+    ### What you MUST NOT do
+    - Do NOT write a `load_data.py` or custom data-loading code.
+    - Do NOT call `pd.read_pickle` yourself in `main.py`.
+    - Do NOT re-parse `fh_effdt`, re-normalize features, or reshape the
+      panel. The scaffold owns all of that.
+    - Do NOT attempt to join external data not already in `tfminput.pkl`.
 
   FeatureEng: |
     ## FeatureEng Specification
@@ -414,33 +420,28 @@ component_spec:
   Ensemble: |
     ## Ensemble Specification (MBS Prepayment)
 
-    Combine predictions from multiple prepayment models.
+    Combine predictions from multiple prepayment models into a single
+    `build_model()` object that the scaffold fits once.
 
     ### Requirements
     - Each model in the ensemble MUST have a **distinct architecture**
       (e.g., LightGBM + XGBoost + Ridge). Do NOT duplicate the same
       model type — 3× LightGBM with different seeds is NOT an ensemble.
-    - Ensemble weights should be tuned on validation RMSE.
-    ### Metric calculation
-    - Save per-model and ensemble validation scores to `scores.csv`.
-    - The metric column name must be `rmse_smm_decimal`.
-    - The index must include each model name and `"ensemble"` (lowercase).
-    - Use `np.sqrt(mean_squared_error(y_true, y_pred))` for RMSE.
-      Do NOT use `mean_squared_error(..., squared=False)`.
+    - Ensemble weights should be tuned on validation RMSE inside the
+      ensemble model's own `fit(X, y, X_val=X_val, y_val=y_val,
+      sample_weight=...)` method — the scaffold passes all three.
+    - Use `np.sqrt(mean_squared_error(y_true, y_pred))` if you need RMSE
+      internally. Do NOT use `mean_squared_error(..., squared=False)`.
 
-# ---------------------------------------------------------------------------
-# Feedback evaluation schema (merged into exp_feedback output)
-# ---------------------------------------------------------------------------
-feedback_schema_extra: |
-  Additional MBS-specific fields that MUST appear in the feedback JSON:
-
-  {
-    "burnout_check": "For CUSIPs with >12 months of positive rate_incentive, does predicted SMM_DECIMAL decrease vs fresh CUSIPs? Pass/Fail.",
-    "temporal_stability": "Is holdout RMSE within 1.5x of training RMSE? Pass/Fail with numbers.",
-    "extreme_regime_check": "When rate_incentive exceeds +200bps, does predicted SMM_DECIMAL plateau (Reasonable) or explode (Dangerous)?",
-    "coupon_bucket_check": "Is RMSE reasonably uniform across coupon buckets, or concentrated in specific ranges? Report per-bucket RMSE.",
-    "coupon_bucket_regression_flag": "If any single coupon bucket's RMSE increased by >20% from SOTA, set this to true — the overall metric may be misleading."
-  }
+    ### CRITICAL — output file ownership
+    - **Do NOT write `scores.csv`, `scores.json`, or `submission.csv`**
+      from the ensemble code. All three files are produced exclusively
+      by `run_scaffold_pipeline()`. Writing them manually will overwrite
+      the scaffold's output and cause the experiment to be marked FAILED.
+    - The scaffold records per-model validation scores indirectly via
+      `scores.json` (which contains the MBS scorecard for the final
+      fitted estimator). Internal ensemble weight tuning should stay
+      in-process — do not persist per-model CSVs.
 
 # ---------------------------------------------------------------------------
 # Guidance strings injected into other LLM calls

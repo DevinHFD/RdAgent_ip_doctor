@@ -125,26 +125,17 @@ class MBSExperiment2Feedback(DSExperiment2Feedback):
             feedback_desc=feedback_desc,
             cur_vs_sota_score=cur_vs_sota_score,
         )
-        # 4) Pull the MBS-specific feedback-schema extra fields so the LLM's
-        # JSON response includes rate_sensitivity_check, burnout_check, etc.
-        # Source of truth: scenarios/mbs_prepayment/prompts.yaml.
-        try:
-            mbs_schema_extra = T("scenarios.mbs_prepayment.prompts:feedback_schema_extra").r()
-        except (FileNotFoundError, KeyError):
-            mbs_schema_extra = ""
-        if mbs_schema_extra:
-            mbs_schema_extra = (
-                "\n\n## Additional MBS Feedback Fields (MUST be present in JSON response)\n"
-                + mbs_schema_extra
-            )
 
-        # Append MBS scorecard, memory, and schema extras to user prompt
+        # Append MBS scorecard and memory context to the user prompt.
+        # Prepayment-specific checks (burnout, per-coupon uniformity, regime
+        # robustness) are already surfaced deterministically via the scorecard
+        # block above, so the LLM reasons about them inline within the standard
+        # "Observations" and "Feedback for Hypothesis" fields.
         user_prompt = (
             user_prompt
             + mbs_scorecard_text
             + "\n"
             + mbs_memory_text
-            + mbs_schema_extra
         )
 
         resp_dict = json.loads(

@@ -32,12 +32,18 @@ def test_component_specs_present_for_all_mbs_components():
 
 
 @pytest.mark.offline
-def test_dataloader_spec_enforces_temporal_lag():
+def test_dataloader_spec_delegates_to_scaffold():
     loader = MBSPromptLoader()
     spec = loader.get("component_spec.DataLoader")
-    assert "lag" in spec.lower()
+    # Scaffold owns data loading
+    assert "run_scaffold_pipeline" in spec
+    assert "scaffold" in spec.lower()
+    assert "Do NOT write a `load_data.py`" in spec
+    # Panel keys
     assert "fh_effdt" in spec
     assert "cusip" in spec
+    # Forbidden columns guard
+    assert "CPR_DECIMAL" in spec
 
 
 @pytest.mark.offline
@@ -50,18 +56,9 @@ def test_feature_eng_spec_lists_canonical_features():
 
 
 @pytest.mark.offline
-def test_feedback_schema_includes_coupon_bucket_check():
-    loader = MBSPromptLoader()
-    schema = loader.get("feedback_schema_extra")
-    assert "coupon_bucket_check" in schema
-    assert "burnout_check" in schema
-
-
-@pytest.mark.offline
 def test_all_keys_discoverable():
     loader = MBSPromptLoader()
     keys = loader.all_keys()
     assert "scen.role" in keys
     assert "hypothesis_specification" in keys
     assert "component_spec.DataLoader" in keys
-    assert "feedback_schema_extra" in keys

@@ -41,7 +41,7 @@ from .memory import IterationPhase, MBSMemory
 from .orchestration import DomainValidator, MBSOrchestrator, PhaseGate
 from .personas import PersonaRouter
 from .scaffold import GNMA_HARNESS_FEATURES, MBSCUSIPSplit, MBSDataContract, MBSTrainTestSplit
-from .search_strategy import MBSSearchState, format_filter_for_prompt
+from .search_strategy import MBS_TO_DS_COMPONENT, MBSSearchState, format_filter_for_prompt
 
 
 class MBSPrepaymentScen(DataScienceScen):
@@ -211,12 +211,19 @@ class MBSPrepaymentScen(DataScienceScen):
         sections: list[str] = []
 
         # 1) Current phase and gate criteria
+        # The phase allowlist is in MBS-native names (richer, 7-name taxonomy);
+        # the DS proposer can only emit one of {DataLoadSpec, FeatureEng, Model,
+        # Ensemble, Workflow} so we show the translated DS set alongside.
         spec = self.mbs_orchestrator.phase_spec()
+        ds_allowed = sorted({MBS_TO_DS_COMPONENT.get(c, c) for c in spec.allowed_components})
         sections.append(
             f"## MBS Phase: {spec.phase.value}\n"
             f"**Goal**: {spec.goal}\n"
             f"**Gate criteria**: {spec.gate_criteria_description}\n"
-            f"**Allowed components**: {', '.join(spec.allowed_components)}"
+            f"**MBS focus areas** (for hypothesis content): "
+            f"{', '.join(spec.allowed_components)}\n"
+            f"**Allowed DS components** (for the `component` field in your "
+            f"structured output): {', '.join(ds_allowed)}"
         )
 
         # 2) Search strategy constraints (curriculum filter)
