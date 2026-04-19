@@ -252,16 +252,19 @@ class MBSEvaluationHarness:
                 regime_rmses[t_str] = float(_rmse_w_on_mask(y_true, y_pred, upb, self.upb_weight_cap, mask_arr))
         out["regime_transition_rmse"] = regime_rmses
 
-        # Rolling 12-month RMSE stability
+        # Rolling 12-month RMSE stability (within-month UPB-weighted, across-month simple mean)
         df = pd.DataFrame({"fh_effdt": fh, "y_true": y_true, "y_pred": y_pred}).dropna()
+        if upb is not None:
+            df["w"] = np.minimum(np.where(np.isnan(upb), 0.0, upb), self.upb_weight_cap)
+        else:
+            df["w"] = 1.0
+        df = df[df["w"] > 0]
         if len(df) >= 12:
             df["month"] = df["fh_effdt"].dt.to_period("M")
-            monthly_sq_err = (
-                df.assign(sq=(df["y_true"] - df["y_pred"]) ** 2)
-                .groupby("month")["sq"]
-                .mean()
-            )
-            rolling = monthly_sq_err.rolling(12).mean().dropna() ** 0.5
+            df["wsq"] = df["w"] * (df["y_true"] - df["y_pred"]) ** 2
+            g = df.groupby("month")
+            monthly_wmse = g["wsq"].sum() / g["w"].sum()
+            rolling = monthly_wmse.rolling(12).mean().dropna() ** 0.5
             if len(rolling) > 0:
                 out["rolling_12m_rmse_ratio"] = float(rolling.max() / max(rolling.min(), 1e-12))
                 out["rolling_12m_rmse_max"] = float(rolling.max())
