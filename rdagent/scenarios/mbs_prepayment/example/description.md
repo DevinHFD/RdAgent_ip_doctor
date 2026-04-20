@@ -15,9 +15,15 @@ Build a regression model that takes monthly CUSIP-level observations as input
 and predicts `SMM_DECIMAL ∈ [0, 1]` for the holdout period. Predictions must
 respect MBS prepayment theory:
 
-- **Rate sensitivity** must be monotonic in `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`
-  (the 30yr refinance incentive)
-- **S-curve** refi response inflects in the **50–150 bps** incentive range
+- **Rate sensitivity** must be monotonic in `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`,
+  a **dimensionless ratio** equal to the pool's gross coupon divided by the
+  2-month average 30yr market rate
+  (`WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2)`). A ratio **> 1** means
+  the pool coupon exceeds the recent market rate — i.e. there is a refinance
+  incentive. This feature is NOT expressed in bps.
+- **S-curve** refi response inflects just above the refi boundary — target
+  inflection ratio in the **[1.00, 1.20]** range (pool coupon 0–20% above the
+  recent average market rate)
 - **Burnout** — experiments should meaningfully use
   `Burnout_Prop_WAC_30yr_log_sum60` and/or
   `Burnout_Prop_30yr_Switch_to_15_Lag1`
@@ -103,7 +109,8 @@ Before scoring, the scaffold inverse-transforms the GNMA features via
   `[0,3), [3,3.5), [3.5,4), [4,4.5), [4.5,5), [5,∞)`
 - **Rate-sensitivity monotonicity** (Spearman rank correlation between
   predictions and raw `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`)
-- **S-curve R²** and inflection point in bps
+- **S-curve R²** and inflection point in refi-incentive ratio units
+  (same units as `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`)
 - **UPB-weighted regime-transition RMSE** at 2013-05, 2020-03, 2022-03
 - **Structural properties**: burnout ITM/non-ITM gap, seasonality residual
   range, CUSIP-differentiation std

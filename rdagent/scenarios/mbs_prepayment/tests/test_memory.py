@@ -15,7 +15,7 @@ SCORECARD_BASELINE = {
         "overall_rmse": 0.030,
         "rmse_by_coupon_bucket": {"0.0-3.0": 0.020, "3.0-3.5": 0.025, "5.0+": 0.045},
     },
-    "rate_sensitivity": {"monotonicity_spearman": 0.6, "s_curve_r2": 0.5, "inflection_point_bps": 80.0},
+    "rate_sensitivity": {"monotonicity_spearman": 0.6, "s_curve_r2": 0.5, "inflection_point_ratio": 1.05},
     "temporal_robustness": {"regime_transition_rmse": {"2020-03-01": 0.040}},
     "structural_properties": {
         "cusip_differentiation_std": 0.003,
@@ -28,7 +28,7 @@ SCORECARD_IMPROVED = {
         "overall_rmse": 0.022,
         "rmse_by_coupon_bucket": {"0.0-3.0": 0.015, "3.0-3.5": 0.018, "5.0+": 0.030},
     },
-    "rate_sensitivity": {"monotonicity_spearman": 0.88, "s_curve_r2": 0.82, "inflection_point_bps": 95.0},
+    "rate_sensitivity": {"monotonicity_spearman": 0.88, "s_curve_r2": 0.82, "inflection_point_ratio": 1.08},
     "temporal_robustness": {"regime_transition_rmse": {"2020-03-01": 0.028}},
     "structural_properties": {
         "cusip_differentiation_std": 0.006,

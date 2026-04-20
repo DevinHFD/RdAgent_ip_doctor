@@ -105,12 +105,15 @@ PHASE_SPECS: dict[Phase, PhaseSpec] = {
         phase=Phase.RATE_RESPONSE,
         goal=(
             "Get the S-curve right — a nonlinear refinancing response to rate_incentive. "
-            "The model must exhibit a sigmoidal shape with inflection in [50, 150] bps."
+            "Avg_Prop_Refi_Incentive_WAC_30yr_2mos is a dimensionless ratio "
+            "(WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2)); a ratio of 1.0 "
+            "is the refi boundary. The model must exhibit a sigmoidal shape whose "
+            "inflection (in ratio units) lies near that boundary, in [1.00, 1.20]."
         ),
         iteration_budget=(4, 8),
         allowed_components=("RateCurveFeatures", "PrepaymentModel"),
         gate_criteria_description=(
-            "s_curve_r2 >= 0.6 AND inflection_point_bps in [50, 150]."
+            "s_curve_r2 >= 0.6 AND inflection_point_ratio in [1.00, 1.20]."
         ),
     ),
     Phase.DYNAMICS: PhaseSpec(
@@ -402,7 +405,10 @@ class PhaseGate:
 
     baseline_max_rmse: float = 0.040
     rate_response_min_s_curve_r2: float = 0.6
-    rate_response_inflection_range_bps: tuple[float, float] = (50.0, 150.0)
+    # Inflection is expressed in the same units as
+    # Avg_Prop_Refi_Incentive_WAC_30yr_2mos — a dimensionless ratio
+    # (pool WAC / recent avg 30yr mortgage rate). 1.0 is the refi boundary.
+    rate_response_inflection_range_ratio: tuple[float, float] = (1.00, 1.20)
     dynamics_max_worst_coupon_rmse: float = 0.035
     macro_regime_transition_ratio: float = 2.0  # regime_rmse <= ratio * overall_rmse
 
@@ -438,13 +444,13 @@ class PhaseGate:
                     f"s_curve_r2={r2:.2f} (threshold {self.rate_response_min_s_curve_r2:.2f})",
                 )
             )
-            infl = props.get("inflection_point_bps", 0.0)
-            lo, hi = self.rate_response_inflection_range_bps
+            infl = props.get("inflection_point_ratio", 0.0)
+            lo, hi = self.rate_response_inflection_range_ratio
             checks.append(
                 ValidationCheck(
                     "inflection_in_range",
                     lo <= infl <= hi,
-                    f"inflection={infl:.0f}bps (target [{lo:.0f}, {hi:.0f}]bps)",
+                    f"inflection={infl:.3f} ratio (target [{lo:.2f}, {hi:.2f}])",
                 )
             )
 
@@ -517,7 +523,7 @@ def _props_to_dict(props: ModelProperties) -> dict[str, Any]:
         "overall_rmse": props.overall_rmse,
         "rmse_by_coupon_bucket": dict(props.rmse_by_coupon_bucket),
         "s_curve_r2": props.s_curve_r2,
-        "inflection_point_bps": props.inflection_point_bps,
+        "inflection_point_ratio": props.inflection_point_ratio,
         "regime_transition_rmse_mean": props.regime_transition_rmse_mean,
         "cusip_differentiation_std": props.cusip_differentiation_std,
     }

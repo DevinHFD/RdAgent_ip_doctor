@@ -34,7 +34,11 @@ def test_quant_researcher_prompt_mentions_mbs_concepts():
     p = get_persona(PersonaKind.QUANT_RESEARCHER)
     prompt = p.system_prompt.lower()
     assert "richard-roll" in prompt or "s-curve" in prompt
-    assert "rate_incentive" in prompt or "rate incentive" in prompt
+    assert (
+        "refi incentive" in prompt
+        or "refinance incentive" in prompt
+        or "avg_prop_refi_incentive" in prompt
+    )
     assert "smm_decimal" in prompt or "smm" in prompt
 
 

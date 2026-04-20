@@ -27,7 +27,7 @@ BASELINE_SCORECARD = {
         "overall_rmse": 0.028,
         "rmse_by_coupon_bucket": {"0.0-3.0": 0.020, "3.0-3.5": 0.022, "5.0+": 0.030},
     },
-    "rate_sensitivity": {"monotonicity_spearman": 0.8, "s_curve_r2": 0.75, "inflection_point_bps": 90.0},
+    "rate_sensitivity": {"monotonicity_spearman": 0.8, "s_curve_r2": 0.75, "inflection_point_ratio": 1.10},
     "temporal_robustness": {"regime_transition_rmse": {"2020-03-01": 0.045}},
     "structural_properties": {
         "cusip_differentiation_std": 0.004,
@@ -138,7 +138,7 @@ def test_rate_response_gate_checks_s_curve_and_inflection():
     gate = PhaseGate()
     props = ModelProperties.from_scorecard(5, "LightGBM", "RateCurveFeatures", BASELINE_SCORECARD)
     result = gate.evaluate(Phase.RATE_RESPONSE, props)
-    # s_curve_r2 0.75, inflection 90bps — all good
+    # s_curve_r2 0.75, inflection ratio 1.10 (within [1.00, 1.20]) — all good
     assert result.passed
 
 
@@ -150,7 +150,7 @@ def test_rate_response_gate_fails_on_inflection_out_of_range():
         "rate_sensitivity": {
             "monotonicity_spearman": 0.8,
             "s_curve_r2": 0.75,
-            "inflection_point_bps": 300.0,  # out of [50, 150]
+            "inflection_point_ratio": 3.00,  # out of [1.00, 1.20]
         },
     }
     props = ModelProperties.from_scorecard(5, "LightGBM", "RateCurveFeatures", scorecard)

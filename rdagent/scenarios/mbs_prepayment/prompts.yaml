@@ -103,7 +103,8 @@ scenario_description: |
   All RMSE metrics below are fh_upb-weighted (fh_upb capped at 150M).
   1. Accuracy: overall_rmse, rmse_by_coupon_bucket, rmse_tail_high/low,
      rmse_by_vintage
-  2. Rate Sensitivity Fidelity: s_curve_r2, inflection_point_bps
+  2. Rate Sensitivity Fidelity: s_curve_r2, inflection_point_ratio
+     (inflection expressed in refi-incentive ratio units; target near 1.0)
   3. Temporal Robustness: regime_transition_rmse, rolling_12m_rmse_ratio
   4. Structural Properties: burnout_effect_mean_itm vs non_itm,
      seasonality_residual_range, cusip_differentiation_std
@@ -330,7 +331,9 @@ component_spec:
     out-of-sample rate scenarios.
 
     ### Checks (deterministic, no LLM)
-    1. At extreme rate_incentive (+300bps), predicted SMM_DECIMAL should not
+    1. At a deeply in-the-money refi incentive
+       (Avg_Prop_Refi_Incentive_WAC_30yr_2mos >> 1 — pool coupon well above
+       recent market rate), predicted SMM_DECIMAL should not
        exceed the max observed training SMM_DECIMAL × 1.5 (no dangerous
        extrapolation).
     2. Burnout check: for matched CUSIPs at identical rate_incentive but

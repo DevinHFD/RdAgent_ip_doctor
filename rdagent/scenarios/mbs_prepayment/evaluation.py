@@ -23,7 +23,11 @@ Scorecard dimensions:
     Rate Sensitivity Fidelity:
         - monotonicity_spearman: Spearman rank corr (predicted, rate_incentive)
         - s_curve_r2: R^2 of logistic fit to (incentive, predicted)
-        - inflection_point_bps: Estimated bps where refi response steepens
+        - inflection_point_ratio: Refi-incentive RATIO
+          (Avg_Prop_Refi_Incentive_WAC_30yr_2mos = WAC / avg(mortgage_rate_lag1,
+          mortgage_rate_lag2); >1 means the pool coupon exceeds recent market
+          rate — i.e. refi incentive) at which the fitted logistic S-curve
+          crosses the mid-point of the normalized prediction range.
     Temporal Robustness:
         - regime_transition_rmse: RMSE in the first 3 months after each
             major regime transition in the holdout period
@@ -226,7 +230,7 @@ class MBSEvaluationHarness:
         )
         s_curve = _fit_logistic_s_curve(incentive[valid], y_pred[valid])
         out["s_curve_r2"] = float(s_curve["r2"])
-        out["inflection_point_bps"] = float(s_curve["inflection_bps"])
+        out["inflection_point_ratio"] = float(s_curve["inflection_ratio"])
         return out
 
     # --- Temporal robustness ---------------------------------------------
@@ -281,7 +285,10 @@ class MBSEvaluationHarness:
         # Burnout effect: do CUSIPs with sustained ITM predict lower than fresh?
         if self.rate_incentive_col in features.columns:
             incentive = features[self.rate_incentive_col].to_numpy(dtype=float)
-            itm_mask = incentive > 0.25  # 25bps+ in-the-money
+            # Avg_Prop_Refi_Incentive_WAC_30yr_2mos is a dimensionless ratio
+            # (WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2)); ratio > 1 means
+            # the pool coupon exceeds the recent market rate, i.e. refi incentive.
+            itm_mask = incentive > 1.0
             if itm_mask.sum() >= 30 and (~itm_mask).sum() >= 30:
                 out["burnout_effect_mean_itm"] = float(np.nanmean(y_pred[itm_mask]))
                 out["burnout_effect_mean_non_itm"] = float(np.nanmean(y_pred[~itm_mask]))
@@ -353,22 +360,24 @@ def _fit_logistic_s_curve(incentive: np.ndarray, y_pred: np.ndarray) -> dict[str
     y = y_pred
     y_min, y_max = y.min(), y.max()
     if y_max - y_min < 1e-8:
-        return {"r2": 0.0, "inflection_bps": 0.0}
+        return {"r2": 0.0, "inflection_ratio": 0.0}
     yn = (y - y_min) / (y_max - y_min + 1e-12)
     yn = np.clip(yn, 1e-4, 1 - 1e-4)
     z = np.log(yn / (1 - yn))
     xm = x - x.mean()
     denom = float(np.sum(xm * xm))
     if denom < 1e-12:
-        return {"r2": 0.0, "inflection_bps": 0.0}
+        return {"r2": 0.0, "inflection_ratio": 0.0}
     slope = float(np.sum(xm * (z - z.mean())) / denom)
     intercept = float(z.mean() - slope * x.mean())
     z_hat = slope * x + intercept
     ss_res = float(np.sum((z - z_hat) ** 2))
     ss_tot = float(np.sum((z - z.mean()) ** 2))
     r2 = 1 - ss_res / max(ss_tot, 1e-12)
+    # Inflection is expressed in the same units as the input feature
+    # (Avg_Prop_Refi_Incentive_WAC_30yr_2mos), i.e. a dimensionless ratio.
     inflection = -intercept / slope if abs(slope) > 1e-12 else 0.0
-    return {"r2": max(0.0, min(1.0, r2)), "inflection_bps": float(inflection)}
+    return {"r2": max(0.0, min(1.0, r2)), "inflection_ratio": float(inflection)}
 
 
 def write_scorecard(scorecard: dict[str, Any], path: str) -> None:

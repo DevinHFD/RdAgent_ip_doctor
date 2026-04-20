@@ -97,7 +97,9 @@ class MBSPrepaymentScen(DataScienceScen):
             "inverse-transforms the GNMA features with scaler.sav before "
             "scoring, so reported diagnostics are in raw units: UPB-weighted "
             "per-coupon-bucket RMSE (on raw WAC), S-curve R² and inflection "
-            "point (vs raw Avg_Prop_Refi_Incentive_WAC_30yr_2mos), and "
+            "point in ratio units vs raw Avg_Prop_Refi_Incentive_WAC_30yr_2mos "
+            "(= WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2); >1 means "
+            "refi incentive), and "
             "UPB-weighted regime-transition RMSE. A model that improves "
             "overall UPB-weighted RMSE but degrades per-coupon uniformity or "
             "regime-transition RMSE is a REJECT. "
@@ -173,9 +175,9 @@ class MBSPrepaymentScen(DataScienceScen):
         self.mbs_gate = PhaseGate(
             baseline_max_rmse=MBSP_SETTINGS.gate_baseline_max_rmse,
             rate_response_min_s_curve_r2=MBSP_SETTINGS.gate_rate_response_min_s_curve_r2,
-            rate_response_inflection_range_bps=(
-                MBSP_SETTINGS.gate_rate_response_inflection_min_bps,
-                MBSP_SETTINGS.gate_rate_response_inflection_max_bps,
+            rate_response_inflection_range_ratio=(
+                MBSP_SETTINGS.gate_rate_response_inflection_min_ratio,
+                MBSP_SETTINGS.gate_rate_response_inflection_max_ratio,
             ),
             dynamics_max_worst_coupon_rmse=MBSP_SETTINGS.gate_dynamics_max_worst_coupon_rmse,
             macro_regime_transition_ratio=MBSP_SETTINGS.gate_macro_regime_transition_ratio,

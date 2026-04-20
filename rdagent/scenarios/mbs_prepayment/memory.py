@@ -60,7 +60,9 @@ class ModelProperties:
     overall_rmse: float
     rmse_by_coupon_bucket: dict[str, float] = field(default_factory=dict)
     s_curve_r2: float = 0.0
-    inflection_point_bps: float = 0.0
+    # Inflection of the fitted S-curve in ratio units
+    # (Avg_Prop_Refi_Incentive_WAC_30yr_2mos = WAC / avg 30yr mortgage rate).
+    inflection_point_ratio: float = 0.0
     burnout_halflife_months: float | None = None
     seasonal_amplitude: float = 0.0
     holdout_rmse: float = 0.0
@@ -105,7 +107,7 @@ class ModelProperties:
                 k: float(v) for k, v in (acc.get("rmse_by_coupon_bucket", {}) or {}).items()
             },
             s_curve_r2=float(rs.get("s_curve_r2", 0.0)),
-            inflection_point_bps=float(rs.get("inflection_point_bps", 0.0)),
+            inflection_point_ratio=float(rs.get("inflection_point_ratio", 0.0)),
             burnout_halflife_months=burnout_halflife_months,
             seasonal_amplitude=float(sp.get("seasonality_residual_range", 0.0) or 0.0),
             holdout_rmse=float(acc.get("overall_rmse", 0.0)),

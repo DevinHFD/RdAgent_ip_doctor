@@ -163,8 +163,12 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # ------------------------------------------------------------------
     gate_baseline_max_rmse: float = 0.040
     gate_rate_response_min_s_curve_r2: float = 0.6
-    gate_rate_response_inflection_min_bps: float = 50.0
-    gate_rate_response_inflection_max_bps: float = 150.0
+    # Inflection point of the fitted S-curve is expressed in the same units as
+    # Avg_Prop_Refi_Incentive_WAC_30yr_2mos — a dimensionless ratio
+    # (WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2)). A ratio of 1.0 is
+    # the refi boundary; the knee of a healthy S-curve is slightly above that.
+    gate_rate_response_inflection_min_ratio: float = 1.00
+    gate_rate_response_inflection_max_ratio: float = 1.20
     gate_dynamics_max_worst_coupon_rmse: float = 0.035
     gate_macro_regime_transition_ratio: float = 2.0
 

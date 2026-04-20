@@ -38,7 +38,7 @@
 | FHA_Program | % of UPB from Federal Housing Administration | float |
 | VA_Program | % of UPB from Department of Veterans Affairs | float |
 | SATO | Spread between WAC and Mortgage Rate at Origination | float |
-| Avg_Prop_Refi_Incentive_WAC_30yr_2mos | Refinance Incentive: 30yr | float |
+| Avg_Prop_Refi_Incentive_WAC_30yr_2mos | Refinance Incentive (30yr), **dimensionless ratio** = `WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2)`. A ratio > 1 means the pool coupon exceeds the 2-month-average 30yr market rate — i.e. refi incentive. NOT in bps. | float |
 | Avg_Prop_Switch_To_15yr_Incentive_2mos | Refinance Incentive: 30yr to 15yr | float |
 | Burnout_Prop_WAC_30yr_log_sum60 | Burnout: 30yr, log sum over last 60 months | float |
 | Burnout_Prop_30yr_Switch_to_15_Lag1 | Burnout: 30yr to 15yr, lagged by 1 month | float |
