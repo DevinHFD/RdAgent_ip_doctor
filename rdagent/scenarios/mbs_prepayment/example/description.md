@@ -88,23 +88,60 @@ test  = df[df["fh_effdt"] >  "2024-10-31"]
 
 ## Evaluation
 
-Primary metric: **RMSE of SMM_DECIMAL** on the holdout.
+Primary metric: **fh_upb-weighted RMSE of SMM_DECIMAL** on the holdout,
+where the per-row weight is `min(fh_upb, 150_000_000)` (larger pools
+contribute more; any single pool is capped at 150M to prevent dominance).
+Plain / unweighted RMSE is NOT the scoring metric and should not be used as
+a training or validation loss.
 
 Before scoring, the scaffold inverse-transforms the GNMA features via
-`scaler.sav`, so every diagnostic below is computed on **raw-unit** values:
+`scaler.sav`, so every diagnostic below is computed on **raw-unit** values.
+**Every RMSE figure in the scorecard is UPB-weighted** with the same
+`min(fh_upb, 150M)` weights:
 
-- **Per-coupon-bucket RMSE** across `WAC` buckets
+- **Per-coupon-bucket UPB-weighted RMSE** across `WAC` buckets
   `[0,3), [3,3.5), [3.5,4), [4,4.5), [4.5,5), [5,∞)`
 - **Rate-sensitivity monotonicity** (Spearman rank correlation between
   predictions and raw `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`)
 - **S-curve R²** and inflection point in bps
-- **Regime-transition RMSE** at 2013-05, 2020-03, 2022-03
+- **UPB-weighted regime-transition RMSE** at 2013-05, 2020-03, 2022-03
 - **Structural properties**: burnout ITM/non-ITM gap, seasonality residual
   range, CUSIP-differentiation std
 
-A model that improves overall RMSE but **degrades per-coupon RMSE
-uniformity**, refi-incentive monotonicity, or regime-transition RMSE is a
-**REJECT**.
+A model that improves overall UPB-weighted RMSE but **degrades per-coupon
+UPB-weighted RMSE uniformity**, refi-incentive monotonicity, or
+UPB-weighted regime-transition RMSE is a **REJECT**.
+
+---
+
+## Current SOTA (beat this)
+
+The reference model to beat is an **MLP trained with fh_upb-weighted RMSE
+as the training loss** (NOT plain MSE / RMSE). Any iteration that claims to
+reproduce, match, or beat the SOTA MUST use the UPB-weighted loss; a
+reproduction that uses plain RMSE is not a reproduction.
+
+- **Architecture**: PyTorch MLP, 3 hidden layers of sizes `[10, 20, 10]`,
+  Leaky ReLU activations on hidden layers, Sigmoid on the final output.
+- **Features**: all GNMA feature columns listed in `gnma_feature.md`,
+  consumed as-is from the already-normalized `tfminput.pkl`. Do not
+  re-normalize.
+- **Loss (critical)**: UPB-weighted MSE / RMSE, where the per-sample weight
+  is `w = min(fh_upb, 150e6)`. Equivalent forms (all acceptable):
+  - PyTorch: `loss = (w * (y_pred - y_true) ** 2).sum() / w.sum()` then
+    `sqrt(.)` if you want RMSE units (MSE vs RMSE is equivalent for
+    gradient direction; the scorecard reports RMSE).
+  - sklearn-wrapper style: `model.fit(X, y, sample_weight=w)` with
+    `w = np.minimum(df_train["fh_upb"].to_numpy(), 150e6)`.
+- **Optimizer / training regime**: Adam, mini-batch `batch_size ≥ 4096`,
+  early-stopping on UPB-weighted *validation* RMSE using
+  `w_val = np.minimum(X_val["fh_upb"].to_numpy(), 150e6)`.
+- **Target**: `SMM_DECIMAL ∈ [0, 1]` directly (not CPR, not logit-
+  transformed); the Sigmoid output keeps predictions in range.
+
+Non-MLP reproductions (GBM, linear, etc.) are welcome, but the same loss
+contract applies: training weight = `min(fh_upb, 150e6)`, validation
+metric = UPB-weighted RMSE with the same weights.
 
 ---
 
