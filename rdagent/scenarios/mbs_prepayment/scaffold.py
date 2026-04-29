@@ -652,6 +652,7 @@ def run_scaffold_pipeline(
     - ``history_output_dir``: where to write the cross-loop test predictions
       history file.  Defaults to ``./mbs_output`` next to the workspace.
     """
+    from rdagent.scenarios.mbs_prepayment.conf import MBSP_SETTINGS
     from rdagent.scenarios.mbs_prepayment.evaluation import (
         MBSEvaluationHarness,
         write_scorecard,
@@ -699,7 +700,24 @@ def run_scaffold_pipeline(
         ],
         axis=1,
     )
-    harness = MBSEvaluationHarness()
+    # Plumb MBSP_SETTINGS into the harness so env-var overrides
+    # (MBSP_S_CURVE_BIN_EDGES, MBSP_REGIME_TRANSITION_DATES, column-name
+    # overrides, etc.) take effect on the production scoring path. Without
+    # this, the harness silently uses the dataclass defaults regardless of
+    # how the user configured the scenario.
+    harness = MBSEvaluationHarness(
+        coupon_buckets=MBSP_SETTINGS.coupon_buckets_list(),
+        regime_transition_dates=MBSP_SETTINGS.regime_transition_dates_list(),
+        coupon_col=MBSP_SETTINGS.coupon_col,
+        rate_incentive_col=MBSP_SETTINGS.rate_incentive_col,
+        fh_effdt_col=MBSP_SETTINGS.date_col,
+        cusip_col=MBSP_SETTINGS.cusip_col,
+        wala_col=MBSP_SETTINGS.wala_col,
+        s_curve_bin_edges=list(MBSP_SETTINGS.s_curve_bin_edges),
+        s_curve_left_tail_max_ratio=MBSP_SETTINGS.s_curve_left_tail_max_ratio,
+        s_curve_right_tail_min_ratio=MBSP_SETTINGS.s_curve_right_tail_min_ratio,
+        s_curve_min_rows_per_bin=MBSP_SETTINGS.s_curve_min_rows_per_bin,
+    )
     scorecard = harness.evaluate(
         y_true=result["y_true"], y_pred=result["y_pred"], features=harness_features
     )
