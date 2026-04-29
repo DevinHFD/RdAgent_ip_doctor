@@ -217,8 +217,13 @@ def decide_next_iteration(state: MBSSearchState) -> HypothesisFilter:
         mode = ExplorationMode.EXPLORATION
         guidance = (
             "No successful iterations yet — explore broadly. Propose a baseline "
-            "that establishes the temporal train/test split, `rate_incentive` "
-            "feature, and a simple model (Ridge or small GBM)."
+            "that establishes the temporal train/test split, the `rate_incentive` "
+            "feature, and a small PyTorch neural network with Sigmoid output "
+            "(e.g., MLP[16,32,16] with Leaky ReLU, or a 2-expert MoE) trained "
+            "with fh_upb-weighted MSE. The default model family is neural "
+            "networks — this matches the SOTA family (MLP[10,20,10]) so "
+            "subsequent iterations iterate within the same family. GBM/linear "
+            "models are diagnostic baselines only."
         )
     elif all(d >= state.improvement_threshold for d in deltas):
         mode = ExplorationMode.EXPLOITATION
@@ -232,9 +237,13 @@ def decide_next_iteration(state: MBSSearchState) -> HypothesisFilter:
         guidance = (
             f"Last {len(deltas)} iterations all improved RMSE by <{state.improvement_threshold:.0%}. "
             "Progress has stalled — switch to exploration. Propose a hypothesis "
-            "targeting a different component branch or a different model family "
-            "(e.g., from GBM to neural net with sigmoid output, or from unified "
-            "to decomposed turnover + refi model)."
+            "targeting a different component branch or a different neural-network "
+            "architecture variant (e.g., from MLP to a Mixture-of-Experts that "
+            "routes by `Avg_Prop_Refi_Incentive_WAC_30yr_2mos` / burnout, from a "
+            "unified head to decomposed turnover + refi heads, or add residual "
+            "connections / attention over CUSIP features). Stay within the "
+            "PyTorch neural-network family unless a hypothesis explicitly "
+            "justifies a non-NN architecture."
         )
     else:
         mode = ExplorationMode.EXPLOITATION

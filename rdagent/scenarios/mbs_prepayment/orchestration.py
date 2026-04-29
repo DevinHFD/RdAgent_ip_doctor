@@ -92,8 +92,14 @@ PHASE_SPECS: dict[Phase, PhaseSpec] = {
         phase=Phase.BASELINE,
         goal=(
             "Establish a working pipeline with rate_incentive as the primary feature "
-            "and a simple model (Ridge or small GBM). Validate the temporal train/test "
-            "split and the MBSEvaluationHarness scorecard shape."
+            "and a small PyTorch neural network (e.g., MLP[16,32,16] with Leaky ReLU "
+            "+ Sigmoid, or a 2-expert MoE) trained with fh_upb-weighted MSE. The "
+            "default model family is neural networks — this matches the SOTA family "
+            "(MLP[10,20,10]) so subsequent phases iterate within the same family. "
+            "GBM/linear estimators are diagnostic baselines only; do not use them "
+            "as the BASELINE phase model unless a hypothesis explicitly justifies "
+            "a non-NN architecture. Validate the temporal train/test split and the "
+            "MBSEvaluationHarness scorecard shape."
         ),
         iteration_budget=(1, 3),
         allowed_components=("DataLoader", "RateCurveFeatures", "PrepaymentModel"),

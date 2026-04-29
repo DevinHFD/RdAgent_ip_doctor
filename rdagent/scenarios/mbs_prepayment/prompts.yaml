@@ -64,8 +64,22 @@ hypothesis_specification: |
      "try a deeper MLP", "tune hyperparameters") as standalone hypotheses.
      Every iteration must have prepayment-theoretic grounding — what
      economic mechanism does this model/architecture capture better?
-     Equally valid to propose GBM or neural-network hypotheses as long as
-     they are grounded in the Richard-Roll framework or prepayment literature.
+
+     **Default model family: PyTorch neural networks** (MLP, Mixture-of-
+     Experts, decomposed-head, residual, attention variants). The SOTA to
+     beat is an MLP[10,20,10] with Sigmoid output trained on
+     fh_upb-weighted RMSE; staying inside the same family keeps hypotheses
+     iteratively composable. Architectural hypotheses such as "an MoE that
+     routes by `Avg_Prop_Refi_Incentive_WAC_30yr_2mos` lets a refi-
+     specialist expert capture the S-curve while a turnover expert
+     handles low-incentive pools" are well-formed.
+
+     GBM/linear estimators (LightGBM, XGBoost, CatBoost, Ridge, etc.) are
+     allowed ONLY when the hypothesis text explicitly justifies why a
+     non-NN architecture better captures the proposed prepayment
+     mechanism (e.g., dominant high-order interaction structure that an
+     MLP under-fits at this depth). A bare "switch to LightGBM" without
+     such justification must be rejected at this layer.
 
   5. Every feature-engineering hypothesis must state the expected impact on
      per-coupon-bucket RMSE, not just overall RMSE. A model that improves
@@ -236,27 +250,48 @@ component_spec:
       normalized in tfminput.pkl; do NOT re-normalize)
 
     ### Search strategy
-    Explore **both** model families actively — do not focus exclusively on
-    either GBMs or neural networks:
+    **Default model family: PyTorch neural networks.** The SOTA to beat is
+    an MLP[10,20,10] with Leaky ReLU + Sigmoid trained with fh_upb-weighted
+    RMSE; staying inside the same family keeps hypotheses comparable and
+    iteratively composable. GBM/linear estimators are permitted only as
+    diagnostic baselines or when a hypothesis explicitly justifies a non-NN
+    architecture (and the rationale must appear in the hypothesis text).
 
-    **GBM family** (LightGBM, XGBoost, CatBoost, sklearn GradientBoosting):
-    - Fast to iterate, interpretable feature importance, native
-      sample_weight support for UPB-weighted loss.
-    - Good starting point: LightGBM with 200 trees, leaf-wise growth,
-      `sample_weight=min(fh_upb, 150M)`.
+    **Neural network family — primary candidates** (PyTorch `nn.Module`
+    inside an sklearn-style wrapper that accepts
+    `fit(X, y, X_val=..., y_val=..., sample_weight=...)`):
+    - **MLP** — concrete starter: hidden sizes `[16, 32, 16]` with Leaky
+      ReLU on hidden layers and Sigmoid on output, Adam `lr=1e-3`,
+      `batch_size=8192`, 50 epochs, early-stop on UPB-weighted val RMSE
+      with patience=5. Variants: deeper/wider, dropout, residual
+      connections.
+    - **Mixture-of-Experts (MoE)** — N expert MLPs + a gating network that
+      routes inputs (top-k softmax). For MBS, experts can specialize on
+      prepayment regimes (turnover-driven low-coupon pools, refi-driven
+      ITM pools, burned-out pools) with the gate routing on
+      `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`,
+      `Burnout_Prop_WAC_30yr_log_sum60`, `WALA`. Concrete starter:
+      4 experts of MLP[16,32,16], top-2 gate, same Adam/batch settings.
+    - **Decomposed-head NN** — separate heads for turnover / refi /
+      curtailment summed (or gated) at the output, each a small MLP.
+    - **Residual / attention variants** — residual blocks, attention over
+      CUSIP-static features, gated linear units.
+    - In all cases: use `X_val` / `y_val` (passed by the scaffold) for
+      early stopping on UPB-weighted RMSE; mini-batch (batch_size ≥ 4096)
+      is required for the ~4.5 M-row panel.
 
-    **Neural network family** (PyTorch MLP and variants):
-    - Current SOTA is already an MLP [10, 20, 10] — improvements here are
-      high-value. Try deeper/wider architectures, residual connections,
-      attention over CUSIP features, or custom loss functions.
-    - Use X_val / y_val (passed by the scaffold) for early stopping.
-    - Mini-batch training (batch_size ≥ 4096) is required for the full
-      ~4.5 M-row panel.
+    **GBM family — diagnostic baselines only** (LightGBM, XGBoost,
+    CatBoost, sklearn GradientBoosting):
+    - Use only when a hypothesis explicitly states why a tree-based model
+      better captures the proposed prepayment mechanism (e.g.,
+      "interaction-heavy local structure that an MLP under-fits at this
+      depth"). Bare swaps to LightGBM/XGBoost without that rationale must
+      be rejected at the hypothesis layer.
 
-    **Rough alternation target**: roughly every other hypothesis should
-    come from a different family than the previous one. Do not run 3+
-    consecutive GBM iterations or 3+ consecutive neural-net iterations
-    without switching.
+    Do not run 3+ consecutive iterations within the same NN sub-variant
+    without exploring a different sub-variant (MLP → MoE → decomposed-head
+    → residual → …); this keeps the search inside the NN family while
+    avoiding architectural local minima.
 
     ### UPB-weighted loss
     The SOTA model uses fh_upb-weighted RMSE. To replicate this:
@@ -288,20 +323,40 @@ component_spec:
     `.predict(X) -> np.ndarray` methods.
 
     ### Available packages (confirmed installed)
-    - **scikit-learn**: `GradientBoostingRegressor`, `RandomForestRegressor`,
-      `Ridge`, `Lasso`, `ElasticNet`, etc.
+    Listed in the order they should be considered for the default
+    PyTorch-neural-network search; GBM/linear packages appear last because
+    they are diagnostic baselines only.
+
+    - **PyTorch** (`torch`, `torch.nn`): primary choice for all model
+      hypotheses. Define your `nn.Module` and an sklearn-style wrapper
+      class inline in `main.py`. The wrapper's `fit` must accept
+      `(X, y, X_val=None, y_val=None, sample_weight=None)` so the scaffold
+      can pass UPB weights and the validation set. Mixture-of-Experts,
+      decomposed-head, residual, and attention architectures all live
+      here.
+      - For UPB-weighted training loss (matches the scorecard):
+        `loss = (w * (y_pred - y_true) ** 2).sum() / w.sum()` where
+        `w = torch.as_tensor(np.minimum(fh_upb, 150e6), dtype=torch.float32)`.
+      - Optimizer: Adam `lr=1e-3` is a strong default; mini-batch
+        `batch_size ≥ 4096`; early-stop on UPB-weighted val RMSE.
+    - **scikit-learn** (linear baselines only — `Ridge`, `Lasso`,
+      `ElasticNet`): use ONLY for diagnostic baselines or when a
+      hypothesis explicitly justifies a linear specification.
       - For RMSE: use `np.sqrt(mean_squared_error(y_true, y_pred))`.
         Do NOT use `mean_squared_error(..., squared=False)` — it is
         unsupported in the installed scikit-learn version.
-      - For UPB-weighted RMSE (matches the scorecard convention), pass
+      - For UPB-weighted RMSE, pass
         `sample_weight=np.minimum(fh_upb, 150e6)` to `mean_squared_error`:
         `np.sqrt(mean_squared_error(y_true, y_pred, sample_weight=w))`.
-    - **XGBoost**: `xgboost.XGBRegressor`
-      - Set `early_stopping_rounds` in the **constructor**, NOT in `.fit()`.
-      - Use `eval_set=[(X_val, y_val)]` in `.fit()` for early stopping.
-    - **LightGBM**: `lightgbm.LGBMRegressor`
-    - **CatBoost**: `catboost.CatBoostRegressor`
-    - **PyTorch**: for neural network models
+    - **GBM packages — diagnostic baselines only**, not the default:
+      - **LightGBM**: `lightgbm.LGBMRegressor`
+      - **XGBoost**: `xgboost.XGBRegressor`
+        - Set `early_stopping_rounds` in the **constructor**, NOT in
+          `.fit()`. Use `eval_set=[(X_val, y_val)]` in `.fit()` for early
+          stopping.
+      - **CatBoost**: `catboost.CatBoostRegressor`
+      - **scikit-learn**: `GradientBoostingRegressor`,
+        `RandomForestRegressor`.
     - Do NOT use packages that are not listed above.
 
     ### Constraints
