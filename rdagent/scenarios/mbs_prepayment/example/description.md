@@ -120,9 +120,14 @@ Before scoring, the scaffold inverse-transforms the GNMA features via
 - **Structural properties**: burnout ITM/non-ITM gap, seasonality residual
   range, CUSIP-differentiation std
 
-A model that improves overall UPB-weighted RMSE but **degrades per-coupon
-UPB-weighted RMSE uniformity**, refi-incentive monotonicity, or
-UPB-weighted regime-transition RMSE is a **REJECT**.
+A model that improves overall UPB-weighted RMSE but **degrades any of**:
+per-coupon UPB-weighted RMSE uniformity, refi-incentive monotonicity,
+UPB-weighted regime-transition RMSE, or **`s_curve_rmse_mid_belly`**
+(the refi-knee bins, where ratio ∈ [0.9, 1.4)) is a **REJECT**.
+`s_curve_rmse_mid_belly` is the phase-2 gate metric — caps default to
+`0.005` for both `s_curve_rmse_overall` and `s_curve_rmse_mid_belly`,
+configurable via
+`MBSP_GATE_RATE_RESPONSE_MAX_S_CURVE_RMSE_{OVERALL,MID_BELLY}`.
 
 ---
 
@@ -151,9 +156,27 @@ reproduction that uses plain RMSE is not a reproduction.
 - **Target**: `SMM_DECIMAL ∈ [0, 1]` directly (not CPR, not logit-
   transformed); the Sigmoid output keeps predictions in range.
 
-Non-MLP reproductions (GBM, linear, etc.) are welcome, but the same loss
-contract applies: training weight = `min(fh_upb, 150e6)`, validation
-metric = UPB-weighted RMSE with the same weights.
+### Default model family — PyTorch neural networks
+
+The default and recommended search direction is the **PyTorch neural
+network family**: MLPs of varying widths/depths plus economically
+motivated architectures such as **Mixture-of-Experts** (experts
+specialize on prepayment regimes — e.g., turnover-driven low-coupon
+pools, refi-driven ITM pools, burned-out pools — with the gate routing
+on `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`,
+`Burnout_Prop_WAC_30yr_log_sum60`, and `WALA`), decomposed-head models
+(separate heads for turnover / refi / curtailment), and residual /
+attention variants. Every neural-network variant must use the same
+UPB-weighted loss contract above and an sklearn-style wrapper that
+accepts `fit(X, y, X_val=…, y_val=…, sample_weight=…)`.
+
+GBM and linear estimators (LightGBM, XGBoost, CatBoost, Ridge, etc.)
+are **diagnostic baselines only**. A hypothesis that proposes a GBM or
+linear model must explicitly justify why a non-NN architecture better
+captures the proposed prepayment mechanism; bare swaps to a tree
+ensemble without that justification are rejected at the hypothesis
+layer. The same loss contract still applies: training weight =
+`min(fh_upb, 150e6)`, validation metric = UPB-weighted RMSE.
 
 ---
 
