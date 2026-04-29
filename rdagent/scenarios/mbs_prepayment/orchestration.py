@@ -113,13 +113,16 @@ PHASE_SPECS: dict[Phase, PhaseSpec] = {
             "Get the S-curve right — a nonlinear refinancing response to rate_incentive. "
             "Avg_Prop_Refi_Incentive_WAC_30yr_2mos is a dimensionless ratio "
             "(WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2)); a ratio of 1.0 "
-            "is the refi boundary. The model must exhibit a sigmoidal shape whose "
-            "inflection (in ratio units) lies near that boundary, in [1.00, 1.20]."
+            "is the refi boundary. The model is judged by S-curve bin RMSE between "
+            "the UPB-weighted actual and predicted SMM bin curves, with separate "
+            "RMSEs reported for the left tail (no refi incentive), the mid belly "
+            "(refi knee), and the right tail (saturation/burnout)."
         ),
         iteration_budget=(4, 8),
         allowed_components=("RateCurveFeatures", "PrepaymentModel"),
         gate_criteria_description=(
-            "s_curve_r2 >= 0.6 AND inflection_point_ratio in [1.00, 1.20]."
+            "s_curve_rmse_overall <= overall_cap AND "
+            "s_curve_rmse_mid_belly <= mid_belly_cap (refi-knee bins drive the gate)."
         ),
     ),
     Phase.DYNAMICS: PhaseSpec(
@@ -410,11 +413,13 @@ class PhaseGate:
     """Evaluate whether the current SOTA scorecard satisfies a phase's gate."""
 
     baseline_max_rmse: float = 0.040
-    rate_response_min_s_curve_r2: float = 0.6
-    # Inflection is expressed in the same units as
-    # Avg_Prop_Refi_Incentive_WAC_30yr_2mos — a dimensionless ratio
-    # (pool WAC / recent avg 30yr mortgage rate). 1.0 is the refi boundary.
-    rate_response_inflection_range_ratio: tuple[float, float] = (1.00, 1.20)
+    # RATE_RESPONSE gate is now driven by the S-curve bin RMSE between the
+    # UPB-weighted actual and predicted SMM bin curves over
+    # Avg_Prop_Refi_Incentive_WAC_30yr_2mos (a dimensionless refi-incentive
+    # ratio). Caps are in original SMM_DECIMAL units; mid-belly is the
+    # refi-knee region and gets the tightest cap.
+    rate_response_max_s_curve_rmse_overall: float = 0.005
+    rate_response_max_s_curve_rmse_mid_belly: float = 0.005
     dynamics_max_worst_coupon_rmse: float = 0.035
     macro_regime_transition_ratio: float = 2.0  # regime_rmse <= ratio * overall_rmse
 
@@ -442,21 +447,30 @@ class PhaseGate:
             )
 
         elif phase == Phase.RATE_RESPONSE:
-            r2 = props.get("s_curve_r2", 0.0)
+            overall = props.get("s_curve_rmse_overall", float("nan"))
+            ok_overall = (
+                not (overall != overall)  # NaN guard
+                and overall <= self.rate_response_max_s_curve_rmse_overall
+            )
             checks.append(
                 ValidationCheck(
-                    "s_curve_r2_ge_threshold",
-                    r2 >= self.rate_response_min_s_curve_r2,
-                    f"s_curve_r2={r2:.2f} (threshold {self.rate_response_min_s_curve_r2:.2f})",
+                    "s_curve_rmse_overall_le_cap",
+                    ok_overall,
+                    f"s_curve_rmse_overall={overall:.5f} "
+                    f"(cap {self.rate_response_max_s_curve_rmse_overall:.5f})",
                 )
             )
-            infl = props.get("inflection_point_ratio", 0.0)
-            lo, hi = self.rate_response_inflection_range_ratio
+            mid = props.get("s_curve_rmse_mid_belly", float("nan"))
+            ok_mid = (
+                not (mid != mid)
+                and mid <= self.rate_response_max_s_curve_rmse_mid_belly
+            )
             checks.append(
                 ValidationCheck(
-                    "inflection_in_range",
-                    lo <= infl <= hi,
-                    f"inflection={infl:.3f} ratio (target [{lo:.2f}, {hi:.2f}])",
+                    "s_curve_rmse_mid_belly_le_cap",
+                    ok_mid,
+                    f"s_curve_rmse_mid_belly={mid:.5f} "
+                    f"(cap {self.rate_response_max_s_curve_rmse_mid_belly:.5f})",
                 )
             )
 
@@ -528,8 +542,8 @@ def _props_to_dict(props: ModelProperties) -> dict[str, Any]:
         "component_touched": props.component_touched,
         "overall_rmse": props.overall_rmse,
         "rmse_by_coupon_bucket": dict(props.rmse_by_coupon_bucket),
-        "s_curve_r2": props.s_curve_r2,
-        "inflection_point_ratio": props.inflection_point_ratio,
+        "s_curve_rmse_overall": props.s_curve_rmse_overall,
+        "s_curve_rmse_mid_belly": props.s_curve_rmse_mid_belly,
         "regime_transition_rmse_mean": props.regime_transition_rmse_mean,
         "cusip_differentiation_std": props.cusip_differentiation_std,
     }

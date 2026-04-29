@@ -120,66 +120,70 @@ $$
 with **population** standard deviation ($\mathrm{ddof} = 0$).
 Returns $0$ if either $\sigma < 10^{-12}$.
 
-### `s_curve_r2` and `inflection_point_ratio` &nbsp;·&nbsp; [`_fit_logistic_s_curve`](../evaluation.py#L350)
+### `s_curve_rmse_*` &nbsp;·&nbsp; [`_compute_s_curve_rmse`](../evaluation.py)
 
 > **Units of $x$:** `Avg_Prop_Refi_Incentive_WAC_30yr_2mos` is a
 > **dimensionless ratio** equal to
 > $\mathrm{WAC} / \mathrm{avg}(\mathrm{mortgage\_rate}_{t-1}, \mathrm{mortgage\_rate}_{t-2})$.
 > A value $>1$ means the pool coupon exceeds the recent market rate — i.e.
-> refi incentive. It is **not** in bps. Every quantity derived from $x$
-> (including the inflection below) inherits these ratio units.
+> refi incentive. It is **not** in bps.
 
-**Step 1 — normalize predictions to $[0, 1]$:**
+The S-curve metrics measure how well the model's UPB-weighted predicted
+SMM bin curve tracks the empirical UPB-weighted actual SMM bin curve over
+$x$. **No model is fit during evaluation**; the metric is just RMSE
+between two binned curves in original SMM units.
+
+**Step 1 — bin partition.** Right-exclusive bin edges
+$E = \{e_0, e_1, \dots, e_K\}$ with $e_0 = 0$ and $e_K = +\infty$.
+Default edges:
 
 $$
-\tilde{y}_i \;=\; \dfrac{\hat{y}_i - \min \hat{y}}{\max \hat{y} - \min \hat{y} + 10^{-12}},
+E \;=\; \{\,0,\; 0.6,\; 0.7,\; 0.8,\; 0.9,\; 1.0,\; 1.1,\; 1.2,\; 1.3,\;
+1.4,\; 1.5,\; 1.6,\; 1.7,\; +\infty\,\}.
+$$
+
+Bin $B_k = [e_k,\, e_{k+1})$ for $k = 0, \dots, K-1$.
+
+**Step 2 — UPB-weighted bin means.** With weights
+$w_i = \min(\max(0, \mathrm{fh\_upb}_i), c)$, $c = 150{,}000{,}000$:
+
+$$
+\bar{y}_k^{\text{act}} \;=\; \dfrac{\sum_{i \in B_k} w_i\, y_i}
+{\sum_{i \in B_k} w_i},
 \qquad
-\tilde{y}_i \;\leftarrow\; \mathrm{clip}\!\bigl(\tilde{y}_i,\, 10^{-4},\, 1 - 10^{-4}\bigr).
+\bar{y}_k^{\text{pred}} \;=\; \dfrac{\sum_{i \in B_k} w_i\, \hat{y}_i}
+{\sum_{i \in B_k} w_i}.
 $$
 
-If $\max \hat{y} - \min \hat{y} < 10^{-8}$, return $R^2 = 0$ and
-$\mathrm{inflection\_ratio} = 0$.
+A bin is **dropped** from RMSE aggregation if it contains fewer than
+`s_curve_min_rows_per_bin` (default $30$) valid rows or if
+$\sum_{i \in B_k} w_i \le 0$.
 
-**Step 2 — logit linearization:**
+**Step 3 — segment classification.** Each populated bin is assigned to
+one segment:
 
-$$
-z_i \;=\; \ln\!\dfrac{\tilde{y}_i}{1 - \tilde{y}_i}.
-$$
+- **left tail**: $e_{k+1} \le 0.9$ (no refi incentive — turnover-only)
+- **right tail**: $e_k \ge 1.4$ (saturation / burnout)
+- **mid belly**: otherwise (the refi knee)
 
-**Step 3 — closed-form OLS of $z$ on $x$:**
-
-$$
-\beta \;=\; \dfrac{\sum_i (x_i - \bar{x})(z_i - \bar{z})}{\sum_i (x_i - \bar{x})^2},
-\qquad
-\alpha \;=\; \bar{z} - \beta\,\bar{x},
-\qquad
-\hat{z}_i \;=\; \alpha + \beta\, x_i.
-$$
-
-**Step 4 — $R^2$:**
+**Step 4 — segment RMSE.** For a set of populated bins $S$:
 
 $$
-R^2 \;=\; \mathrm{clip}\!\left(
-1 - \dfrac{\sum_i (z_i - \hat{z}_i)^2}{\max\bigl(\sum_i (z_i - \bar{z})^2,\; 10^{-12}\bigr)},\;
-0,\; 1
-\right).
+\mathrm{s\_curve\_rmse}(S) \;=\;
+\sqrt{\dfrac{1}{|S|}\, \sum_{k \in S}
+\bigl(\bar{y}_k^{\text{act}} - \bar{y}_k^{\text{pred}}\bigr)^2}.
 $$
 
-**Step 5 — inflection point (same ratio units as $x$; not bps):**
+The scorecard reports four:
+`s_curve_rmse_overall`, `s_curve_rmse_left_tail`,
+`s_curve_rmse_mid_belly`, `s_curve_rmse_right_tail`. **Bins are weighted
+equally** in the RMSE; this is the "do the two curves agree" measure
+independent of how much data sits in each bin. The min-population
+threshold of $30$ prevents degenerate bins from dominating.
 
-$$
-\mathrm{inflection\_ratio} \;=\;
-\begin{cases}
--\,\alpha / \beta & \text{if } |\beta| > 10^{-12},\\
-0 & \text{otherwise.}
-\end{cases}
-$$
-
-> **Note:** the $z$ on $x$ regression is in logit-of-prediction space; the
-> inflection is the $x$ (in refi-incentive ratio units) at which the fitted
-> logistic crosses the mid-point of the normalized prediction range. A
-> well-calibrated S-curve sits slightly above the refi boundary —
-> $\mathrm{inflection\_ratio} \in [1.00,\, 1.20]$.
+The scorecard also returns the raw curves (`s_curve_actual`,
+`s_curve_predicted`, `s_curve_bin_centers`, `s_curve_bin_counts`) so the
+trace UI can plot the two curves overlaid for visual diagnosis.
 
 ---
 

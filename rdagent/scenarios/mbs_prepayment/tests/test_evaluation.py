@@ -11,7 +11,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rdagent.scenarios.mbs_prepayment.evaluation import MBSEvaluationHarness, write_scorecard
+from rdagent.scenarios.mbs_prepayment.evaluation import (
+    MBSEvaluationHarness,
+    _compute_s_curve_rmse,
+    write_scorecard,
+)
 
 
 @pytest.fixture
@@ -83,6 +87,90 @@ def test_monotonicity_detected_for_good_model(synthetic_mbs_data):
     harness = MBSEvaluationHarness()
     scorecard = harness.evaluate(y_true, y_pred, features)
     assert scorecard["rate_sensitivity"]["monotonicity_spearman"] > 0.95
+
+
+@pytest.mark.offline
+def test_s_curve_rmse_zero_for_perfect_predictions():
+    rng = np.random.default_rng(0)
+    n = 6_000
+    incentive = rng.uniform(0.4, 1.9, n)
+    y_true = 0.005 + 0.05 / (1 + np.exp(-8.0 * (incentive - 1.05)))
+    y_pred = y_true.copy()  # perfect
+    upb = rng.uniform(1e6, 5e7, n)
+
+    out = _compute_s_curve_rmse(
+        y_true=y_true,
+        y_pred=y_pred,
+        incentive=incentive,
+        upb=upb,
+        bin_edges=[0.0, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, np.inf],
+        upb_cap=150e6,
+        min_rows_per_bin=30,
+        left_tail_max=0.9,
+        right_tail_min=1.4,
+    )
+
+    assert out["s_curve_bins_used"] >= 8
+    assert out["s_curve_rmse_overall"] < 1e-12
+    assert out["s_curve_rmse_mid_belly"] < 1e-12
+
+
+@pytest.mark.offline
+def test_s_curve_rmse_segments_isolate_error_location():
+    rng = np.random.default_rng(1)
+    n = 8_000
+    incentive = rng.uniform(0.4, 1.9, n)
+    y_true = 0.005 + 0.05 / (1 + np.exp(-8.0 * (incentive - 1.05)))
+    # Bias predictions only in the mid-belly bins (0.9 ≤ x < 1.4)
+    bias = np.where((incentive >= 0.9) & (incentive < 1.4), 0.020, 0.0)
+    y_pred = y_true + bias
+
+    out = _compute_s_curve_rmse(
+        y_true=y_true,
+        y_pred=y_pred,
+        incentive=incentive,
+        upb=None,  # exercise the unweighted fallback
+        bin_edges=[0.0, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, np.inf],
+        upb_cap=150e6,
+        min_rows_per_bin=30,
+        left_tail_max=0.9,
+        right_tail_min=1.4,
+    )
+
+    # Mid-belly bias of 0.02 should dominate; tails should be near zero.
+    assert out["s_curve_rmse_mid_belly"] > 0.015
+    assert out["s_curve_rmse_left_tail"] < 1e-9
+    assert out["s_curve_rmse_right_tail"] < 1e-9
+    assert out["s_curve_rmse_overall"] > out["s_curve_rmse_left_tail"]
+
+
+@pytest.mark.offline
+def test_s_curve_rmse_drops_sparse_bins():
+    rng = np.random.default_rng(2)
+    # 200 rows in mid bins, only 5 rows in the [0, 0.6) left-tail bin
+    incentive = np.concatenate([
+        rng.uniform(0.9, 1.4, 200),
+        rng.uniform(0.0, 0.55, 5),
+    ])
+    y_true = np.full_like(incentive, 0.01)
+    y_pred = np.full_like(incentive, 0.012)
+
+    out = _compute_s_curve_rmse(
+        y_true=y_true,
+        y_pred=y_pred,
+        incentive=incentive,
+        upb=None,
+        bin_edges=[0.0, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, np.inf],
+        upb_cap=150e6,
+        min_rows_per_bin=30,
+        left_tail_max=0.9,
+        right_tail_min=1.4,
+    )
+
+    # Sparse left-tail bin (5 rows) is dropped -> left_tail RMSE is NaN.
+    assert np.isnan(out["s_curve_rmse_left_tail"])
+    # Mid belly is densely populated -> finite, equals the |0.002| bias.
+    assert abs(out["s_curve_rmse_mid_belly"] - 0.002) < 1e-9
 
 
 @pytest.mark.offline

@@ -27,7 +27,7 @@ BASELINE_SCORECARD = {
         "overall_rmse": 0.028,
         "rmse_by_coupon_bucket": {"0.0-3.0": 0.020, "3.0-3.5": 0.022, "5.0+": 0.030},
     },
-    "rate_sensitivity": {"monotonicity_spearman": 0.8, "s_curve_r2": 0.75, "inflection_point_ratio": 1.10},
+    "rate_sensitivity": {"monotonicity_spearman": 0.8, "s_curve_rmse_overall": 0.0036, "s_curve_rmse_mid_belly": 0.0040},
     "temporal_robustness": {"regime_transition_rmse": {"2020-03-01": 0.045}},
     "structural_properties": {
         "cusip_differentiation_std": 0.004,
@@ -134,29 +134,32 @@ def test_baseline_gate_fails_with_high_rmse():
 
 
 @pytest.mark.offline
-def test_rate_response_gate_checks_s_curve_and_inflection():
+def test_rate_response_gate_passes_when_s_curve_rmse_under_caps():
     gate = PhaseGate()
     props = ModelProperties.from_scorecard(5, "LightGBM", "RateCurveFeatures", BASELINE_SCORECARD)
     result = gate.evaluate(Phase.RATE_RESPONSE, props)
-    # s_curve_r2 0.75, inflection ratio 1.10 (within [1.00, 1.20]) — all good
+    # s_curve_rmse_overall=0.0036, mid_belly=0.0040 — both under 0.005 caps
     assert result.passed
 
 
 @pytest.mark.offline
-def test_rate_response_gate_fails_on_inflection_out_of_range():
+def test_rate_response_gate_fails_when_mid_belly_rmse_over_cap():
     gate = PhaseGate()
     scorecard = {
         **BASELINE_SCORECARD,
         "rate_sensitivity": {
             "monotonicity_spearman": 0.8,
-            "s_curve_r2": 0.75,
-            "inflection_point_ratio": 3.00,  # out of [1.00, 1.20]
+            "s_curve_rmse_overall": 0.0040,
+            "s_curve_rmse_mid_belly": 0.020,  # blown — refi knee badly modeled
         },
     }
     props = ModelProperties.from_scorecard(5, "LightGBM", "RateCurveFeatures", scorecard)
     result = gate.evaluate(Phase.RATE_RESPONSE, props)
     assert not result.passed
-    assert any("inflection" in c.name for c in result.criteria_results if not c.passed)
+    assert any(
+        c.name == "s_curve_rmse_mid_belly_le_cap" and not c.passed
+        for c in result.criteria_results
+    )
 
 
 @pytest.mark.offline

@@ -59,10 +59,10 @@ class ModelProperties:
     component_touched: str
     overall_rmse: float
     rmse_by_coupon_bucket: dict[str, float] = field(default_factory=dict)
-    s_curve_r2: float = 0.0
-    # Inflection of the fitted S-curve in ratio units
-    # (Avg_Prop_Refi_Incentive_WAC_30yr_2mos = WAC / avg 30yr mortgage rate).
-    inflection_point_ratio: float = 0.0
+    # S-curve bin RMSE between UPB-weighted actual and predicted SMM bin
+    # curves over Avg_Prop_Refi_Incentive_WAC_30yr_2mos. Smaller is better.
+    s_curve_rmse_overall: float = float("nan")
+    s_curve_rmse_mid_belly: float = float("nan")
     burnout_halflife_months: float | None = None
     seasonal_amplitude: float = 0.0
     holdout_rmse: float = 0.0
@@ -76,7 +76,8 @@ class ModelProperties:
         return (
             f"iter={self.iteration} model={self.model_type} "
             f"component={self.component_touched} "
-            f"rmse={self.overall_rmse:.5f} s_curve_r2={self.s_curve_r2:.2f}"
+            f"rmse={self.overall_rmse:.5f} "
+            f"s_curve_mid={self.s_curve_rmse_mid_belly:.5f}"
         )
 
     @classmethod
@@ -106,8 +107,8 @@ class ModelProperties:
             rmse_by_coupon_bucket={
                 k: float(v) for k, v in (acc.get("rmse_by_coupon_bucket", {}) or {}).items()
             },
-            s_curve_r2=float(rs.get("s_curve_r2", 0.0)),
-            inflection_point_ratio=float(rs.get("inflection_point_ratio", 0.0)),
+            s_curve_rmse_overall=float(rs.get("s_curve_rmse_overall", float("nan"))),
+            s_curve_rmse_mid_belly=float(rs.get("s_curve_rmse_mid_belly", float("nan"))),
             burnout_halflife_months=burnout_halflife_months,
             seasonal_amplitude=float(sp.get("seasonality_residual_range", 0.0) or 0.0),
             holdout_rmse=float(acc.get("overall_rmse", 0.0)),
@@ -220,9 +221,11 @@ class MBSMemory:
             lines.append("\n### Best successful experiment per component")
             for comp, e in best.items():
                 p = e["properties"]
+                mid = p.get("s_curve_rmse_mid_belly", float("nan"))
+                mid_str = f"{mid:.5f}" if mid == mid else "n/a"
                 lines.append(
                     f"- **{comp}** (iter {e['iteration']}): rmse={p['overall_rmse']:.5f}, "
-                    f"s_curve_r2={p['s_curve_r2']:.2f}"
+                    f"s_curve_rmse_mid_belly={mid_str}"
                 )
                 if p.get("rmse_by_coupon_bucket"):
                     coupon_str = ", ".join(
@@ -270,10 +273,15 @@ class MBSMemory:
         lines = ["## Memory: Feedback Phase Context"]
         if self._data["properties"]:
             sota = min(self._data["properties"], key=lambda p: p["overall_rmse"])
+            sc_overall = sota.get("s_curve_rmse_overall", float("nan"))
+            sc_mid = sota.get("s_curve_rmse_mid_belly", float("nan"))
+            sc_overall_s = f"{sc_overall:.5f}" if sc_overall == sc_overall else "n/a"
+            sc_mid_s = f"{sc_mid:.5f}" if sc_mid == sc_mid else "n/a"
             lines.append(
                 f"\n### SOTA so far (iter {sota['iteration']})"
                 f"\n- overall_rmse: {sota['overall_rmse']:.5f}"
-                f"\n- s_curve_r2: {sota['s_curve_r2']:.2f}"
+                f"\n- s_curve_rmse_overall: {sc_overall_s}"
+                f"\n- s_curve_rmse_mid_belly: {sc_mid_s}"
             )
             if sota.get("rmse_by_coupon_bucket"):
                 coupon_str = ", ".join(

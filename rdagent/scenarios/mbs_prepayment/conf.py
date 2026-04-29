@@ -162,15 +162,33 @@ class MBSPrepaymentSettings(ExtendedBaseSettings):
     # 8. Phase gates (Priority 8)
     # ------------------------------------------------------------------
     gate_baseline_max_rmse: float = 0.040
-    gate_rate_response_min_s_curve_r2: float = 0.6
-    # Inflection point of the fitted S-curve is expressed in the same units as
-    # Avg_Prop_Refi_Incentive_WAC_30yr_2mos — a dimensionless ratio
-    # (WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2)). A ratio of 1.0 is
-    # the refi boundary; the knee of a healthy S-curve is slightly above that.
-    gate_rate_response_inflection_min_ratio: float = 1.00
-    gate_rate_response_inflection_max_ratio: float = 1.20
+    # Phase 2 (RATE_RESPONSE) gate thresholds on the S-curve bin RMSE between
+    # actual and predicted UPB-weighted bin means over
+    # Avg_Prop_Refi_Incentive_WAC_30yr_2mos. Smaller is better; thresholds are
+    # in original SMM_DECIMAL units. Mid-belly is the steep refi-knee region —
+    # tightest threshold goes there.
+    gate_rate_response_max_s_curve_rmse_overall: float = 0.005
+    gate_rate_response_max_s_curve_rmse_mid_belly: float = 0.005
     gate_dynamics_max_worst_coupon_rmse: float = 0.035
     gate_macro_regime_transition_ratio: float = 2.0
+
+    # ------------------------------------------------------------------
+    # 8b. S-curve bin-RMSE configuration (Priority 8, Phase 2 metric)
+    # ------------------------------------------------------------------
+    # Right-exclusive bin edges over Avg_Prop_Refi_Incentive_WAC_30yr_2mos.
+    # The harness builds an actual and a predicted curve by computing
+    # UPB-weighted means of y_true / y_pred per bin, then reports per-segment
+    # RMSE between the two curves.
+    s_curve_bin_edges: list[float] = [
+        0.0, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7,
+        float("inf"),
+    ]
+    # Segment classification: a bin belongs to the LEFT TAIL if its right edge
+    # is ≤ left_tail_max_ratio; to the RIGHT TAIL if its left edge is ≥
+    # right_tail_min_ratio; otherwise to the MID BELLY (the refi-knee region).
+    s_curve_left_tail_max_ratio: float = 0.9
+    s_curve_right_tail_min_ratio: float = 1.4
+    s_curve_min_rows_per_bin: int = 30
 
     phase_budget_baseline: int = 5
     phase_budget_rate_response: int = 8

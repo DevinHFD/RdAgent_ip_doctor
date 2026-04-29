@@ -96,10 +96,13 @@ class MBSPrepaymentScen(DataScienceScen):
             "metrics in the scorecard are UPB-weighted. The scaffold "
             "inverse-transforms the GNMA features with scaler.sav before "
             "scoring, so reported diagnostics are in raw units: UPB-weighted "
-            "per-coupon-bucket RMSE (on raw WAC), S-curve R² and inflection "
-            "point in ratio units vs raw Avg_Prop_Refi_Incentive_WAC_30yr_2mos "
+            "per-coupon-bucket RMSE (on raw WAC), S-curve bin RMSE between "
+            "the UPB-weighted ACTUAL and PREDICTED SMM bin curves over raw "
+            "Avg_Prop_Refi_Incentive_WAC_30yr_2mos "
             "(= WAC / avg(mortgage_rate_lag1, mortgage_rate_lag2); >1 means "
-            "refi incentive), and "
+            "refi incentive) — reported overall plus per-segment "
+            "(left tail / mid belly / right tail) so the loop can see which "
+            "part of the S-curve needs improvement, and "
             "UPB-weighted regime-transition RMSE. A model that improves "
             "overall UPB-weighted RMSE but degrades per-coupon uniformity or "
             "regime-transition RMSE is a REJECT. "
@@ -155,6 +158,10 @@ class MBSPrepaymentScen(DataScienceScen):
             fh_effdt_col=MBSP_SETTINGS.date_col,
             cusip_col=MBSP_SETTINGS.cusip_col,
             wala_col=MBSP_SETTINGS.wala_col,
+            s_curve_bin_edges=list(MBSP_SETTINGS.s_curve_bin_edges),
+            s_curve_left_tail_max_ratio=MBSP_SETTINGS.s_curve_left_tail_max_ratio,
+            s_curve_right_tail_min_ratio=MBSP_SETTINGS.s_curve_right_tail_min_ratio,
+            s_curve_min_rows_per_bin=MBSP_SETTINGS.s_curve_min_rows_per_bin,
         )
         self.mbs_memory = MBSMemory(
             memory_path=MBSP_SETTINGS.memory_path,
@@ -174,11 +181,8 @@ class MBSPrepaymentScen(DataScienceScen):
         )
         self.mbs_gate = PhaseGate(
             baseline_max_rmse=MBSP_SETTINGS.gate_baseline_max_rmse,
-            rate_response_min_s_curve_r2=MBSP_SETTINGS.gate_rate_response_min_s_curve_r2,
-            rate_response_inflection_range_ratio=(
-                MBSP_SETTINGS.gate_rate_response_inflection_min_ratio,
-                MBSP_SETTINGS.gate_rate_response_inflection_max_ratio,
-            ),
+            rate_response_max_s_curve_rmse_overall=MBSP_SETTINGS.gate_rate_response_max_s_curve_rmse_overall,
+            rate_response_max_s_curve_rmse_mid_belly=MBSP_SETTINGS.gate_rate_response_max_s_curve_rmse_mid_belly,
             dynamics_max_worst_coupon_rmse=MBSP_SETTINGS.gate_dynamics_max_worst_coupon_rmse,
             macro_regime_transition_ratio=MBSP_SETTINGS.gate_macro_regime_transition_ratio,
         )

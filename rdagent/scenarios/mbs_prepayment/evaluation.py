@@ -22,12 +22,17 @@ Scorecard dimensions:
         - rmse_by_vintage: Per-vintage-year RMSE
     Rate Sensitivity Fidelity:
         - monotonicity_spearman: Spearman rank corr (predicted, rate_incentive)
-        - s_curve_r2: R^2 of logistic fit to (incentive, predicted)
-        - inflection_point_ratio: Refi-incentive RATIO
-          (Avg_Prop_Refi_Incentive_WAC_30yr_2mos = WAC / avg(mortgage_rate_lag1,
-          mortgage_rate_lag2); >1 means the pool coupon exceeds recent market
-          rate — i.e. refi incentive) at which the fitted logistic S-curve
-          crosses the mid-point of the normalized prediction range.
+        - s_curve_rmse_*: bin RMSE between UPB-weighted ACTUAL and PREDICTED
+            SMM bin curves over Avg_Prop_Refi_Incentive_WAC_30yr_2mos.
+        - s_curve_rmse_{overall,left_tail,mid_belly,right_tail}: RMSE between
+          the UPB-weighted ACTUAL SMM_DECIMAL bin-curve and the UPB-weighted
+          PREDICTED SMM_DECIMAL bin-curve, where bins are over
+          Avg_Prop_Refi_Incentive_WAC_30yr_2mos (a dimensionless refi-incentive
+          ratio). Each bin contributes one point to each curve; bin RMSE is
+          equal-weighted across bins. Segments: left_tail = bins with right
+          edge ≤ left_tail_max_ratio; right_tail = bins with left edge ≥
+          right_tail_min_ratio; mid_belly = the rest. Tail decomposition
+          surfaces which part of the S-curve needs improvement.
     Temporal Robustness:
         - regime_transition_rmse: RMSE in the first 3 months after each
             major regime transition in the holdout period
@@ -91,6 +96,24 @@ class MBSEvaluationHarness:
     #: evaluation window. Format: "YYYY-MM-DD". None disables OOT RMSE.
     train_end_date: str | None = "2024-10-31"
 
+    # --- S-curve bin-RMSE configuration -----------------------------------
+    #: Right-exclusive bin edges over Avg_Prop_Refi_Incentive_WAC_30yr_2mos.
+    #: Default: 13 bins spanning [0, ∞). The curve is built by computing the
+    #: UPB-weighted mean of y_true and y_pred per bin.
+    s_curve_bin_edges: list[float] = field(
+        default_factory=lambda: [
+            0.0, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7,
+            float("inf"),
+        ]
+    )
+    #: A bin belongs to the LEFT TAIL if its right edge ≤ this ratio.
+    s_curve_left_tail_max_ratio: float = 0.9
+    #: A bin belongs to the RIGHT TAIL if its left edge ≥ this ratio.
+    s_curve_right_tail_min_ratio: float = 1.4
+    #: Bins with fewer than this many valid rows are dropped from the RMSE
+    #: aggregation. Matches the per-vintage population threshold.
+    s_curve_min_rows_per_bin: int = 30
+
     def evaluate(
         self,
         y_true: pd.Series,
@@ -125,7 +148,9 @@ class MBSEvaluationHarness:
 
         scorecard: dict[str, Any] = {
             "accuracy": self._accuracy_dimensions(y_true_arr, y_pred_arr, features),
-            "rate_sensitivity": self._rate_sensitivity_dimensions(y_pred_arr, features),
+            "rate_sensitivity": self._rate_sensitivity_dimensions(
+                y_true_arr, y_pred_arr, features
+            ),
             "temporal_robustness": self._temporal_robustness_dimensions(
                 y_true_arr, y_pred_arr, features
             ),
@@ -216,21 +241,38 @@ class MBSEvaluationHarness:
     # --- Rate sensitivity fidelity ---------------------------------------
 
     def _rate_sensitivity_dimensions(
-        self, y_pred: np.ndarray, features: pd.DataFrame
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        features: pd.DataFrame,
     ) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.rate_incentive_col not in features.columns:
             return {"_error": f"feature '{self.rate_incentive_col}' not found"}
         incentive = features[self.rate_incentive_col].to_numpy(dtype=float)
+        upb: np.ndarray | None = None
+        if self.upb_col in features.columns:
+            upb = np.asarray(features[self.upb_col], dtype=float)
+
         valid = ~(np.isnan(incentive) | np.isnan(y_pred))
         if valid.sum() < 10:
             return {"_error": "not enough valid rows for rate sensitivity check"}
         out["monotonicity_spearman"] = float(
             _spearman(incentive[valid], y_pred[valid])
         )
-        s_curve = _fit_logistic_s_curve(incentive[valid], y_pred[valid])
-        out["s_curve_r2"] = float(s_curve["r2"])
-        out["inflection_point_ratio"] = float(s_curve["inflection_ratio"])
+        out.update(
+            _compute_s_curve_rmse(
+                y_true=y_true,
+                y_pred=y_pred,
+                incentive=incentive,
+                upb=upb,
+                bin_edges=self.s_curve_bin_edges,
+                upb_cap=self.upb_weight_cap,
+                min_rows_per_bin=self.s_curve_min_rows_per_bin,
+                left_tail_max=self.s_curve_left_tail_max_ratio,
+                right_tail_min=self.s_curve_right_tail_min_ratio,
+            )
+        )
         return out
 
     # --- Temporal robustness ---------------------------------------------
@@ -354,30 +396,105 @@ def _spearman(x: np.ndarray, y: np.ndarray) -> float:
     return float(cov / denom)
 
 
-def _fit_logistic_s_curve(incentive: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
-    """Lightweight logistic fit. Avoids scipy dependency."""
-    x = incentive
-    y = y_pred
-    y_min, y_max = y.min(), y.max()
-    if y_max - y_min < 1e-8:
-        return {"r2": 0.0, "inflection_ratio": 0.0}
-    yn = (y - y_min) / (y_max - y_min + 1e-12)
-    yn = np.clip(yn, 1e-4, 1 - 1e-4)
-    z = np.log(yn / (1 - yn))
-    xm = x - x.mean()
-    denom = float(np.sum(xm * xm))
-    if denom < 1e-12:
-        return {"r2": 0.0, "inflection_ratio": 0.0}
-    slope = float(np.sum(xm * (z - z.mean())) / denom)
-    intercept = float(z.mean() - slope * x.mean())
-    z_hat = slope * x + intercept
-    ss_res = float(np.sum((z - z_hat) ** 2))
-    ss_tot = float(np.sum((z - z.mean()) ** 2))
-    r2 = 1 - ss_res / max(ss_tot, 1e-12)
-    # Inflection is expressed in the same units as the input feature
-    # (Avg_Prop_Refi_Incentive_WAC_30yr_2mos), i.e. a dimensionless ratio.
-    inflection = -intercept / slope if abs(slope) > 1e-12 else 0.0
-    return {"r2": max(0.0, min(1.0, r2)), "inflection_ratio": float(inflection)}
+def _compute_s_curve_rmse(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    incentive: np.ndarray,
+    upb: np.ndarray | None,
+    bin_edges: list[float],
+    upb_cap: float,
+    min_rows_per_bin: int,
+    left_tail_max: float,
+    right_tail_min: float,
+) -> dict[str, Any]:
+    """S-curve bin-RMSE between actual and predicted UPB-weighted bin means.
+
+    Bins ``incentive`` per ``bin_edges`` (right-exclusive). For each bin with
+    at least ``min_rows_per_bin`` valid rows, computes UPB-weighted means of
+    y_true and y_pred. RMSE between the two bin sequences is the s_curve
+    RMSE; per-segment RMSE (left tail / mid belly / right tail) and the
+    overall RMSE share the same kernel. Each bin contributes one point to
+    each curve and contributes equally to the RMSE — bin equal-weighting
+    matches the "do the two curves agree" interpretation independent of bin
+    population.
+    """
+    edges = np.asarray(bin_edges, dtype=float)
+    n_bins = len(edges) - 1
+
+    valid = ~(np.isnan(y_true) | np.isnan(y_pred) | np.isnan(incentive))
+    if upb is not None:
+        w = np.minimum(np.where(np.isnan(upb), 0.0, np.maximum(upb, 0.0)), upb_cap)
+        valid &= w > 0
+    else:
+        w = np.ones_like(y_true)
+
+    yt = y_true[valid]
+    yp = y_pred[valid]
+    xv = incentive[valid]
+    wv = w[valid]
+
+    # Right-exclusive bin index in [0, n_bins-1]. The first / last bins are
+    # open-bounded by construction (edges[0] = 0, edges[-1] = inf typically).
+    bin_idx = np.digitize(xv, edges[1:-1], right=False)
+
+    actual = np.full(n_bins, np.nan, dtype=float)
+    predicted = np.full(n_bins, np.nan, dtype=float)
+    bin_counts = np.zeros(n_bins, dtype=int)
+
+    for k in range(n_bins):
+        mask = bin_idx == k
+        n = int(mask.sum())
+        bin_counts[k] = n
+        if n < min_rows_per_bin:
+            continue
+        sum_w = float(wv[mask].sum())
+        if sum_w <= 0:
+            continue
+        actual[k] = float((wv[mask] * yt[mask]).sum() / sum_w)
+        predicted[k] = float((wv[mask] * yp[mask]).sum() / sum_w)
+
+    # Bin centers: midpoint of finite bins; for a right-unbounded last bin
+    # we shift the left edge by the prior bin's width so plot scales stay sane.
+    centers = np.zeros(n_bins, dtype=float)
+    for k in range(n_bins):
+        l, r = edges[k], edges[k + 1]
+        if np.isfinite(r):
+            centers[k] = 0.5 * (l + r)
+        else:
+            prev_width = (
+                (edges[k] - edges[k - 1])
+                if k >= 1 and np.isfinite(edges[k - 1])
+                else 0.1
+            )
+            centers[k] = l + 0.5 * prev_width
+
+    bin_left = edges[:-1]
+    bin_right = edges[1:]
+    is_left_tail = bin_right <= left_tail_max
+    is_right_tail = bin_left >= right_tail_min
+    is_mid_belly = ~is_left_tail & ~is_right_tail
+
+    populated = ~np.isnan(actual) & ~np.isnan(predicted)
+
+    def _seg_rmse(seg_mask: np.ndarray) -> float:
+        m = populated & seg_mask
+        if not m.any():
+            return float("nan")
+        diffs = actual[m] - predicted[m]
+        return float(np.sqrt(np.mean(diffs ** 2)))
+
+    return {
+        "s_curve_rmse_overall": _seg_rmse(np.ones(n_bins, dtype=bool)),
+        "s_curve_rmse_left_tail": _seg_rmse(is_left_tail),
+        "s_curve_rmse_mid_belly": _seg_rmse(is_mid_belly),
+        "s_curve_rmse_right_tail": _seg_rmse(is_right_tail),
+        "s_curve_bins_used": int(populated.sum()),
+        "s_curve_bin_edges": edges.tolist(),
+        "s_curve_bin_centers": centers.tolist(),
+        "s_curve_actual": [None if np.isnan(v) else float(v) for v in actual],
+        "s_curve_predicted": [None if np.isnan(v) else float(v) for v in predicted],
+        "s_curve_bin_counts": bin_counts.tolist(),
+    }
 
 
 def write_scorecard(scorecard: dict[str, Any], path: str) -> None:

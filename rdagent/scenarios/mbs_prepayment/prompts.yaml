@@ -117,8 +117,12 @@ scenario_description: |
   All RMSE metrics below are fh_upb-weighted (fh_upb capped at 150M).
   1. Accuracy: overall_rmse, rmse_by_coupon_bucket, rmse_tail_high/low,
      rmse_by_vintage
-  2. Rate Sensitivity Fidelity: s_curve_r2, inflection_point_ratio
-     (inflection expressed in refi-incentive ratio units; target near 1.0)
+  2. Rate Sensitivity Fidelity: monotonicity_spearman and S-curve bin RMSE
+     between UPB-weighted ACTUAL and PREDICTED SMM bin curves over
+     Avg_Prop_Refi_Incentive_WAC_30yr_2mos —
+     `s_curve_rmse_overall`, plus per-segment
+     `s_curve_rmse_{left_tail, mid_belly, right_tail}`. The mid belly
+     covers the refi knee and is the gate-driving sub-metric.
   3. Temporal Robustness: regime_transition_rmse, rolling_12m_rmse_ratio
   4. Structural Properties: burnout_effect_mean_itm vs non_itm,
      seasonality_residual_range, cusip_differentiation_std
