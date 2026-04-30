@@ -110,8 +110,9 @@ Before scoring, the scaffold inverse-transforms the GNMA features via
 
 - **Per-coupon-bucket UPB-weighted RMSE** across `WAC` buckets
   `[0,3), [3,3.5), [3.5,4), [4,4.5), [4.5,5), [5,∞)`
-- **Rate-sensitivity monotonicity** (Spearman rank correlation between
-  predictions and raw `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`)
+- **Rate-sensitivity monotonicity** (`monotonicity_spearman` —
+  Spearman rank correlation between predictions and raw
+  `Avg_Prop_Refi_Incentive_WAC_30yr_2mos`)
 - **S-curve bin RMSE** between UPB-weighted actual and predicted SMM
   bin curves over `Avg_Prop_Refi_Incentive_WAC_30yr_2mos` —
   `s_curve_rmse_overall` plus per-segment
@@ -187,5 +188,8 @@ The scaffold writes `submission.csv` with columns
 all CUSIPs, all time rows, seed=42). The target column in the panel is
 **`SMM_DECIMAL`** (uppercase). Predictions are automatically clipped to
 `[0, 1]` by the scaffold. The coder only needs to provide a `build_model()`
-callable returning an unfitted
-sklearn-compatible estimator.
+callable returning an unfitted sklearn-compatible estimator — by default
+a PyTorch neural-network wrapper (MLP, Mixture-of-Experts, decomposed-
+head, residual / attention variants); see "Default model family" above.
+GBM and linear estimators are diagnostic baselines only and require a
+prepayment-mechanism justification at the hypothesis layer.
