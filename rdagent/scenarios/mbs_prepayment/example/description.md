@@ -146,11 +146,30 @@ reproduction that uses plain RMSE is not a reproduction.
   re-normalize.
 - **Loss (critical)**: UPB-weighted MSE / RMSE, where the per-sample weight
   is `w = min(fh_upb, 150e6)`. Equivalent forms (all acceptable):
-  - PyTorch: `loss = (w * (y_pred - y_true) ** 2).sum() / w.sum()` then
-    `sqrt(.)` if you want RMSE units (MSE vs RMSE is equivalent for
-    gradient direction; the scorecard reports RMSE).
+  - PyTorch (REQUIRED reshape contract — see warning below):
+    ```python
+    # Network output is shape (batch, 1) when the head is nn.Linear(..., 1).
+    # Reshape to 1-D BEFORE computing the custom loss; otherwise the
+    # subtraction `(B, 1) - (B,)` broadcasts to (B, B) and only the first
+    # prediction effectively contributes (gradients are silently wrong).
+    y_pred = y_pred.reshape(-1)         # or torch.reshape(y_pred, (y_pred.shape[0],))
+    y_true = y_true.reshape(-1)         # keep both 1-D for safety
+    w      = w.reshape(-1)
+    loss   = (w * (y_pred - y_true) ** 2).sum() / w.sum()
+    # take sqrt(.) if you want RMSE units; MSE and RMSE share gradient
+    # direction so either is fine for training. The scorecard reports RMSE.
+    ```
   - sklearn-wrapper style: `model.fit(X, y, sample_weight=w)` with
     `w = np.minimum(df_train["fh_upb"].to_numpy(), 150e6)`.
+
+  > ⚠️ **PyTorch shape gotcha** — without the `reshape(-1)` step above,
+  > a model with `nn.Linear(..., 1)` head emits predictions of shape
+  > `(batch, 1)`. Subtracting a 1-D `y_true` of shape `(batch,)` triggers
+  > NumPy-style broadcasting to `(batch, batch)`; the weighted MSE then
+  > sums an outer product instead of a residual vector and the loss
+  > tracks roughly the first prediction only. Apply the reshape to
+  > `y_pred` (and defensively to `y_true` and `w`) **for every custom
+  > loss**: weighted MSE, RMSE, Huber, quantile, log-cosh, etc.
 - **Optimizer / training regime**: Adam, mini-batch `batch_size ≥ 4096`,
   early-stopping on UPB-weighted *validation* RMSE using
   `w_val = np.minimum(X_val["fh_upb"].to_numpy(), 150e6)`.
